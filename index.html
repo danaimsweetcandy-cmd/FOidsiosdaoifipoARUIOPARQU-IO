@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#171523">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>가계부</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="month-pick" id="monthPick">
+    <span id="monthLabel">이번 달</span>
+    <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+  </div>
+  <div class="topsum">
+    <span class="ts-out" id="sumOut">0</span>
+    <span class="ts-div">/</span>
+    <span class="ts-in" id="sumIn">0</span>
+  </div>
+  <button class="syncdot" id="syncBtn" aria-label="동기화 상태"><span class="dot" id="syncDot"></span></button>
+</header>
+
+<main>
+
+<!-- ─────────── 입력 ─────────── -->
+<section class="view" id="view-add" data-view="add">
+  <div class="addtop">
+    <div class="seg" role="tablist" aria-label="유형">
+      <button class="seg-b is-on" data-type="지출" role="tab">지출</button>
+      <button class="seg-b" data-type="수입" role="tab">수입</button>
+      <button class="seg-b" data-type="이체" role="tab">이체</button>
+      <span class="seg-ind" id="segInd"></span>
+    </div>
+
+    <div class="amount" id="amountBox">
+      <span class="am-sign" id="amSign">-</span><span class="am-num" id="amNum">0</span><span class="am-won">원</span>
+    </div>
+
+    <div class="preset-row" id="presetRow"></div>
+
+    <div class="catgrid" id="catGrid"></div>
+    <div class="subrow" id="subRow"></div>
+
+    <div class="payrow" id="payRow"></div>
+
+    <div class="metarow">
+      <input class="memo" id="memo" type="text" placeholder="메모" autocomplete="off" enterkeyhint="done" maxlength="40">
+      <label class="fixed-t" id="fixedWrap"><input type="checkbox" id="fixedChk"><span>고정비</span></label>
+      <input class="datepick" id="datePick" type="date">
+    </div>
+  </div>
+
+  <div class="editbar" id="editBar" hidden>
+    <span>수정 중</span>
+    <button id="editDel">삭제</button>
+    <button id="editCancel">취소</button>
+  </div>
+
+  <div class="keypad" id="keypad">
+    <button class="k" data-k="1">1</button><button class="k" data-k="2">2</button><button class="k" data-k="3">3</button>
+    <button class="k k-fn" data-k="del" aria-label="지우기">
+      <svg width="24" height="18" viewBox="0 0 24 18" aria-hidden="true"><path d="M8 1h14a1 1 0 011 1v14a1 1 0 01-1 1H8L1 9z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 6l6 6M18 6l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+    <button class="k" data-k="4">4</button><button class="k" data-k="5">5</button><button class="k" data-k="6">6</button>
+    <button class="k k-fn" data-k="00">00</button>
+    <button class="k" data-k="7">7</button><button class="k" data-k="8">8</button><button class="k" data-k="9">9</button>
+    <button class="k k-fn" data-k="000">000</button>
+    <button class="k k-zero" data-k="0">0</button>
+    <button class="k k-save" id="saveBtn">저장</button>
+  </div>
+</section>
+
+<!-- ─────────── 내역 ─────────── -->
+<section class="view" id="view-list" data-view="list" hidden>
+  <div class="listwrap" id="listWrap"></div>
+</section>
+
+<!-- ─────────── 통계 ─────────── -->
+<section class="view" id="view-stat" data-view="stat" hidden>
+  <div class="statwrap" id="statWrap"></div>
+</section>
+
+<!-- ─────────── 설정 ─────────── -->
+<section class="view" id="view-set" data-view="set" hidden>
+  <div class="setwrap">
+    <h2>구글시트 연동</h2>
+    <p class="hint">Apps Script 웹앱 주소와 토큰을 넣으면 저장할 때마다 시트로 올라가. 비워두면 휴대폰에만 저장돼.</p>
+    <label class="field"><span>웹앱 주소</span><input id="cfgUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off"></label>
+    <label class="field"><span>토큰</span><input id="cfgToken" type="text" placeholder="Code.gs에 적은 것과 같은 값" autocomplete="off"></label>
+    <label class="switch"><input type="checkbox" id="cfgAuto" checked><span>저장할 때 바로 올리기</span></label>
+    <div class="btnrow">
+      <button class="btn" id="syncNow">지금 올리기</button>
+      <button class="btn" id="testConn">연결 확인</button>
+    </div>
+    <p class="hint" id="syncMsg"></p>
+
+    <h2>자주 쓰는 항목</h2>
+    <p class="hint">입력 화면 맨 위에 뜨는 원탭 버튼. 금액과 분류가 한 번에 채워져.</p>
+    <div class="presetedit" id="presetEdit"></div>
+    <button class="btn" id="presetAdd">지금 입력값을 추가</button>
+
+    <h2>데이터</h2>
+    <div class="btnrow">
+      <button class="btn" id="expCsv">CSV 내보내기</button>
+      <button class="btn" id="expJson">백업 파일 저장</button>
+      <button class="btn" id="impJson">백업 불러오기</button>
+    </div>
+    <p class="hint" id="dataMsg"></p>
+    <button class="btn btn-danger" id="wipe">기기에서 전부 지우기</button>
+    <input type="file" id="impFile" accept="application/json" hidden>
+  </div>
+</section>
+
+</main>
+
+<nav class="tabbar">
+  <button class="tab is-on" data-go="add">입력</button>
+  <button class="tab" data-go="list">내역</button>
+  <button class="tab" data-go="stat">통계</button>
+  <button class="tab" data-go="set">설정</button>
+</nav>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
