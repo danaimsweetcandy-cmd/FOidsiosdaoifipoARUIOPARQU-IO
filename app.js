@@ -33,6 +33,10 @@ const DEFAULT_PRESETS = [
   { type:'지출', amount:12000, cat:'식비', sub:'외식',     pay:'체크카드', memo:'', label:'점심' }
 ];
 
+// GET query string 하나에 담아 보낼 거래 최대 건수.
+// Apps Script GET 요청의 URL 길이 한계 때문에 너무 크게 잡지 않는다.
+const GAS_CHUNK_SIZE = 10;
+
 /* ───────── 저장소 ───────── */
 const K = { tx:'lg.tx', cfg:'lg.cfg', pre:'lg.presets', pay:'lg.lastpay' };
 const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
@@ -293,7 +297,7 @@ function renderStat() {
     </div>`;
 }
 
-/* ───────── 동기화 ───────── */
+/* ───────── 동기화 (GET 전용, Google Sheets가 원본) ───────── */
 function setDot(state) { $('#syncDot').className = 'dot' + (state ? ' ' + state : ''); }
 function pendingCount() { return TX.filter(t => !t.synced).length; }
 function refreshDot() {
@@ -301,12 +305,13 @@ function refreshDot() {
   setDot(pendingCount() ? 'pending' : 'ok');
 }
 
-async function post(payload) {
-  const res = await fetch(CFG.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ token: CFG.token }, payload))
-  });
+// Apps Script는 GET + query string만 처리한다 (POST는 리다이렉트 중 body가 사라지는 문제가 있었음).
+async function callGas(action, payload) {
+  const params = new URLSearchParams();
+  params.set('action', action);
+  params.set('token', CFG.token || '');
+  if (payload !== undefined) params.set('payload', JSON.stringify(payload));
+  const res = await fetch(CFG.url + '?' + params.toString());
   const txt = await res.text();
   let data;
   try { data = JSON.parse(txt); } catch { throw new Error('시트가 이상한 응답을 보냈어. 배포 설정을 확인해줘.'); }
@@ -314,27 +319,86 @@ async function post(payload) {
   return data;
 }
 
+function rowForServer(t) {
+  return {
+    id: t.id, date: t.date, type: t.type, amount: t.amount,
+    cat: t.cat, sub: t.sub, pay: t.pay, memo: t.memo,
+    fixed: !!t.fixed, deleted: !!t.deleted, updated: t.updated
+  };
+}
+
+// 서버(getAll) 데이터를 local TX와 병합한다. 같은 id는 updated가 더 큰(최신) 쪽이 승자.
+// 서버에 없던 로컬 전용 항목(아직 한 번도 업로드 못한 데이터)은 그대로 보존한다 -
+// "서버가 비어있다고 로컬을 지우면 안 된다"는 원칙.
+function mergeServerData(rows) {
+  const byId = {};
+  TX.forEach(t => { byId[t.id] = t; });
+  (rows || []).forEach(r => {
+    if (!r || !r.id) return;
+    const server = {
+      id: r.id, date: r.date, type: r.type, amount: Number(r.amount) || 0,
+      cat: r.cat || '', sub: r.sub || '', pay: r.pay || '', memo: r.memo || '',
+      fixed: !!r.fixed, deleted: !!r.deleted, updated: Number(r.updated) || 0,
+      synced: true
+    };
+    const local = byId[r.id];
+    if (!local || server.updated >= (local.updated || 0)) {
+      byId[r.id] = server;
+    }
+  });
+  // 삭제(tombstone) 확정된 항목은 local에서도 제거 (화면/저장 공간에는 유지할 필요 없음)
+  TX = Object.values(byId).filter(t => !t.deleted);
+  saveTx();
+}
+
+// 서버에서 최신 데이터를 가져와 병합하고 화면을 갱신한다.
+async function pullFromServer(quiet) {
+  if (!CFG.url) { setDot(''); return false; }
+  try {
+    const data = await callGas('getAll');
+    mergeServerData(data.rows || []);
+    refreshDot();
+    renderTop(); renderList(); renderStat();
+    return true;
+  } catch (e) {
+    setDot(pendingCount() ? 'pending' : 'err');
+    if (!quiet) toast(e.message);
+    return false;
+  }
+}
+
 let flushing = false;
+// 아직 서버에 못 올린 거래를 업로드하고, 성공하면(혹은 올릴 게 없으면) 서버 최신 상태를 다시 받아온다.
 async function flush(quiet) {
   if (flushing) return;
   if (!CFG.url) { if (!quiet) toast('설정에서 웹앱 주소를 넣어줘'); return; }
+
   const queue = TX.filter(t => !t.synced);
-  if (!queue.length) { if (!quiet) toast('올릴 게 없어'); refreshDot(); return; }
+  if (!queue.length) {
+    if (!quiet) toast('올릴 게 없어');
+    await pullFromServer(true);
+    return;
+  }
+
   flushing = true; setDot('pending');
   try {
-    for (let i = 0; i < queue.length; i += 100) {
-      const chunk = queue.slice(i, i + 100);
-      await post({ rows: chunk.map(t => ({ ...t, synced: undefined })) });
-      for (const t of chunk) t.synced = true;
+    for (let i = 0; i < queue.length; i += GAS_CHUNK_SIZE) {
+      const chunk = queue.slice(i, i + GAS_CHUNK_SIZE);
+      await callGas('upsert', { rows: chunk.map(rowForServer) });
+      chunk.forEach(t => { t.synced = true; });
+      saveTx();
     }
-    TX = TX.filter(t => !(t.deleted && t.synced));
-    saveTx(); refreshDot(); renderList();
-    if (!quiet) toast(`${queue.length}건 올렸어`);
   } catch (e) {
+    flushing = false;
     setDot('err');
     if (!quiet) toast(e.message);
     else toast('시트 전송 실패. 휴대폰에는 저장됐어.');
-  } finally { flushing = false; }
+    return;
+  }
+  flushing = false;
+  renderList();
+  if (!quiet) toast(`${queue.length}건 올렸어`);
+  await pullFromServer(true);
 }
 
 /* ───────── 내보내기 ───────── */
@@ -443,8 +507,8 @@ $('#cfgAuto').addEventListener('change', e => { CFG.auto = e.target.checked; sav
 $('#syncNow').addEventListener('click', async () => { await flush(false); renderSettings(); });
 $('#testConn').addEventListener('click', async () => {
   if (!CFG.url) return toast('주소를 먼저 넣어줘');
-  try { await post({ rows: [] }); toast('연결 됐어'); setDot('ok'); }
-  catch (e) { toast(e.message); setDot('err'); }
+  const ok = await pullFromServer(false);
+  if (ok) { toast('연결 됐어'); renderSettings(); }
 });
 $('#presetAdd').addEventListener('click', () => {
   if (!S.digits) return toast('입력 탭에서 금액과 분류를 먼저 정해줘');
@@ -464,28 +528,36 @@ $('#impFile').addEventListener('change', async e => {
     const d = JSON.parse(await f.text());
     const ids = new Set(TX.map(t => t.id));
     let n = 0;
-    for (const t of (d.tx || [])) if (!ids.has(t.id)) { TX.push(t); n++; }
+    for (const t of (d.tx || [])) {
+      if (!ids.has(t.id)) {
+        // 백업 파일의 synced 값은 신뢰하지 않는다 - 서버 확인 전까지는 미동기화로 취급하고
+        // 다음 flush에서 서버와 다시 맞춘다 (서버에 이미 있으면 updated 비교로 자연스럽게 정리됨).
+        TX.push(Object.assign({}, t, { synced: false }));
+        n++;
+      }
+    }
     if (d.presets) { PRE = d.presets; savePre(); }
     saveTx(); renderAll(); renderTop(); renderList(); renderStat(); renderSettings();
-    toast(`${n}건 불러왔어`);
+    toast(`${n}건 불러왔어. 서버와 확인 중...`);
+    if (CFG.url) flush(true);
   } catch { toast('파일을 읽지 못했어'); }
   e.target.value = '';
 });
 $('#wipe').addEventListener('click', () => {
-  if (!confirm('이 기기의 모든 기록을 지울까? 되돌릴 수 없어.')) return;
+  if (!confirm('이 기기의 모든 기록을 지울까? 되돌릴 수 없어. (구글 시트의 데이터는 지워지지 않음)')) return;
   TX = []; saveTx(); renderAll(); renderTop(); renderList(); renderStat(); renderSettings();
-  toast('전부 지웠어');
+  toast('이 기기에서만 지웠어');
 });
 
-window.addEventListener('online', () => { if (CFG.auto && CFG.url) flush(true); });
+window.addEventListener('online', () => { if (CFG.url) flush(true); });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     if (S.date !== todayStr() && !S.editId) { S.date = todayStr(); $('#datePick').value = S.date; }
-    if (CFG.auto && CFG.url) flush(true);
+    if (CFG.url) flush(true);
   }
 });
 
 /* ───────── 시작 ───────── */
 renderAll(); renderTop(); refreshDot();
-if (CFG.auto && CFG.url) flush(true);
+if (CFG.url) flush(true);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
