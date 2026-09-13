@@ -1,254 +1,199 @@
 /**
- * 가계부 PWA ↔ 구글 시트 연동 (Google Sheets가 원본, PWA는 캐시)
- *
- * 쓰는 순서
- *  1) 아래 TOKEN을 아무도 모를 문자열로 바꾼다 (앱 설정에도 같은 값을 넣는다)
- *  2) 상단 함수 목록에서 setup 을 골라 한 번 실행 (권한 승인 필요)
- *  3) 배포 > 새 배포 > 유형 '웹 앱'
- *       실행 계정: 나
- *       액세스 권한: 모든 사용자
- *     → 나오는 /exec 주소를 앱 설정의 '웹앱 주소'에 붙여넣는다
- *
- * 코드를 고친 뒤에는 '배포 관리 > 편집 > 버전: 새 버전'으로 다시 배포해야 반영된다.
- *
- * 클라이언트(app.js)는 모든 요청을 GET + query string(action, token, payload)으로 보낸다.
- * doPost는 더 이상 실제 처리를 하지 않는다 (Apps Script 리다이렉트 중 POST body가
- * 사라지는 문제 때문에 이 프로젝트에서는 쓰기 요청에 POST를 쓰지 않기로 함).
+ * 가계부 PWA v3 backend
+ * 쓰기 요청은 프로젝트 원칙대로 GET + query string만 사용한다.
  */
-
 var TOKEN = '여기를_바꿔줘_아무도_모를_문자열';
+var APP_ID = 'ledger';
+var SCHEMA_VERSION = 3;
 var SHEET = '거래';
-// 12번째 컬럼(삭제)은 tombstone 방식 삭제 표시용. 'Y'면 삭제된 것으로 취급한다.
-var HEAD = ['id', '날짜', '월', '유형', '금액', '대분류', '소분류', '결제수단', '메모', '고정비', '수정시각', '삭제'];
-
-/* ───────── 웹앱 진입점 ───────── */
+var HEAD = ['id','날짜','월','유형','금액','대분류','소분류','결제수단','메모','고정비','수정시각','삭제','기기ID','서버리비전'];
+var PROP_STORE = 'LEDGER_STORE_ID';
+var PROP_REV = 'LEDGER_REV';
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
   var action = p.action || 'ping';
-
-  if (action === 'ping') {
-    return json({ ok: true, msg: '가계부 수신 대기 중' });
-  }
-
-  if (p.token !== TOKEN) {
-    return json({ ok: false, error: '토큰이 달라. 앱 설정과 Code.gs를 맞춰줘.' });
-  }
-
-  if (action === 'getAll') {
-    try {
-      return json({ ok: true, rows: getAllRows_() });
-    } catch (err) {
-      return json({ ok: false, error: String(err && err.message ? err.message : err) });
-    }
-  }
-
-  if (action === 'upsert') {
-    var payload;
-    try {
-      payload = JSON.parse(p.payload || '{}');
-    } catch (err) {
-      return json({ ok: false, error: '요청 형식이 이상해' });
-    }
-    var lock = LockService.getScriptLock();
-    try {
+  if (action === 'ping') return json_({ok:true, appId:APP_ID, schemaVersion:SCHEMA_VERSION, serverTime:Date.now()});
+  if (p.token !== TOKEN) return json_({ok:false, code:'AUTH', error:'토큰이 달라. 앱 설정과 Code.gs를 맞춰줘.'});
+  try {
+    if (action === 'meta') return json_(meta_());
+    if (action === 'getAll') return json_(getAllResponse_(p.sinceRev));
+    if (action === 'upsert') {
+      var payload = parsePayload_(p.payload);
+      var lock = LockService.getScriptLock();
       lock.waitLock(25000);
-      var result = upsertRows_(payload.rows || []);
-      return json({ ok: true, saved: result.saved, skipped: result.skipped });
-    } catch (err) {
-      return json({ ok: false, error: String(err && err.message ? err.message : err) });
-    } finally {
-      try { lock.releaseLock(); } catch (e2) {}
+      try {
+        var result = upsertRows_(payload.rows || []);
+        var m = meta_();
+        result.ok = true; result.appId = APP_ID; result.schemaVersion = SCHEMA_VERSION;
+        result.storeId = m.storeId; result.serverTime = m.serverTime; result.cursor = m.cursor;
+        return json_(result);
+      } finally { try { lock.releaseLock(); } catch (_) {} }
     }
+    return json_({ok:false, code:'ACTION', error:'알 수 없는 action: ' + action});
+  } catch (err) {
+    return json_({ok:false, code:'SERVER', error:String(err && err.message ? err.message : err)});
   }
-
-  return json({ ok: false, error: '알 수 없는 action: ' + action });
 }
 
-function doPost(e) {
-  // 이 프로젝트의 클라이언트는 더 이상 POST를 사용하지 않는다.
-  // (Apps Script 웹앱의 내부 리다이렉트 과정에서 POST body가 사라지는 문제 때문)
-  return json({ ok: false, error: 'POST는 더 이상 지원하지 않아. 앱을 최신 버전으로 갱신해줘.' });
+function doPost() {
+  return json_({ok:false, code:'POST_DISABLED', error:'POST는 지원하지 않아. 최신 앱은 GET 방식만 사용해.'});
 }
 
-/* ───────── 핵심 로직 ───────── */
+function parsePayload_(text) {
+  try { return JSON.parse(text || '{}'); }
+  catch (_) { throw new Error('요청 형식이 이상해'); }
+}
+
+function meta_() {
+  return {ok:true, appId:APP_ID, schemaVersion:SCHEMA_VERSION, storeId:getStoreId_(), serverTime:Date.now(), cursor:getRev_()};
+}
+
+function getStoreId_() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty(PROP_STORE);
+  if (!id) { id = Utilities.getUuid(); props.setProperty(PROP_STORE, id); }
+  return id;
+}
+function getRev_() { return Number(PropertiesService.getScriptProperties().getProperty(PROP_REV)) || 0; }
+function nextRev_() {
+  var props = PropertiesService.getScriptProperties();
+  var n = (Number(props.getProperty(PROP_REV)) || 0) + 1;
+  props.setProperty(PROP_REV, String(n));
+  return n;
+}
+
+function validateDate_(s) {
+  s = String(s || '');
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  var y=Number(m[1]), mo=Number(m[2]), d=Number(m[3]);
+  var dt = new Date(y,mo-1,d);
+  return dt.getFullYear()===y && dt.getMonth()===mo-1 && dt.getDate()===d;
+}
+function cleanStr_(v,max) {
+  var s = String(v == null ? '' : v).trim();
+  if (s.length > max) throw new Error('문자열 길이가 제한을 넘었어');
+  return s;
+}
+function validateRow_(r) {
+  if (!r || typeof r !== 'object') throw new Error('거래 데이터가 비어 있어');
+  var id = cleanStr_(r.id,120); if (!id) throw new Error('id가 없어');
+  if (!validateDate_(r.date)) throw new Error('날짜 형식이 잘못됐어: ' + r.date);
+  var type = cleanStr_(r.type,10); if (['지출','수입','이체'].indexOf(type) < 0) throw new Error('유형이 잘못됐어');
+  var amount = Number(r.amount); if (!isFinite(amount) || amount <= 0 || amount > 9999999999) throw new Error('금액이 잘못됐어');
+  var updated = Number(r.updated); if (!isFinite(updated) || updated <= 946684800000) throw new Error('수정시각이 잘못됐어');
+  if (updated > Date.now() + 7*24*60*60*1000) throw new Error('기기 시간이 너무 미래로 설정돼 있어');
+  return {
+    id:id,date:String(r.date),type:type,amount:Math.round(amount),cat:cleanStr_(r.cat,40),sub:cleanStr_(r.sub,40),
+    pay:cleanStr_(r.pay,40),memo:cleanStr_(r.memo,200),fixed:!!r.fixed,deleted:!!r.deleted,updated:updated,
+    deviceId:cleanStr_(r.deviceId || '',120)
+  };
+}
+function compareVersion_(aUpdated,aDevice,bUpdated,bDevice) {
+  aUpdated=Number(aUpdated)||0; bUpdated=Number(bUpdated)||0;
+  if (aUpdated !== bUpdated) return aUpdated > bUpdated ? 1 : -1;
+  aDevice=String(aDevice||''); bDevice=String(bDevice||'');
+  if (aDevice === bDevice) return 0;
+  return aDevice > bDevice ? 1 : -1;
+}
 
 function upsertRows_(rows) {
-  var sh = sheet();
+  if (!Array.isArray(rows)) throw new Error('rows가 배열이 아니야');
+  if (rows.length > 100) throw new Error('한 요청에 너무 많은 거래가 들어왔어');
+  var sh = sheet_();
   var last = sh.getLastRow();
-  var index = {};        // id -> 시트 행 번호
-  var existingUpdated = {}; // id -> 기존 updated(ms)
-
+  var index = {}, existing = {};
   if (last > 1) {
-    var range = sh.getRange(2, 1, last - 1, HEAD.length).getValues();
-    for (var i = 0; i < range.length; i++) {
-      var id = range[i][0];
-      if (!id) continue;
-      index[String(id)] = i + 2;
-      var upd = range[i][10];
-      existingUpdated[String(id)] = upd instanceof Date ? upd.getTime() : (Number(upd) || 0);
+    var vals = sh.getRange(2,1,last-1,HEAD.length).getValues();
+    for (var i=0;i<vals.length;i++) if (vals[i][0]) {
+      var id=String(vals[i][0]); index[id]=i+2;
+      existing[id]={updated:toMs_(vals[i][10]),deviceId:String(vals[i][12]||''),row:vals[i]};
     }
   }
-
-  var appends = [];
-  var saved = 0, skipped = 0;
-
-  for (var j = 0; j < rows.length; j++) {
-    var r = rows[j];
-    if (!r || !r.id) { skipped++; continue; }
-    var incomingUpdated = Number(r.updated) || Date.now();
-    var at = index[String(r.id)];
-    var existing = at ? existingUpdated[String(r.id)] : null;
-
-    // 서버에 이미 더 최신(같거나 큰 updated) 데이터가 있으면 이번 요청은 무시한다.
-    // (오래된 기기가 최신 데이터를 덮어쓰는 것을 막기 위함)
-    if (at && existing !== null && existing >= incomingUpdated) {
-      skipped++;
-      continue;
+  var saved=0, skipped=0, conflicts=[], appends=[];
+  for (var j=0;j<rows.length;j++) {
+    var r = validateRow_(rows[j]);
+    var at=index[r.id], old=existing[r.id];
+    if (at && compareVersion_(old.updated,old.deviceId,r.updated,r.deviceId) >= 0) {
+      skipped++; conflicts.push({id:r.id,serverUpdated:old.updated,serverDeviceId:old.deviceId}); continue;
     }
-
-    var line = toLine(r, incomingUpdated);
-    if (at) {
-      sh.getRange(at, 1, 1, HEAD.length).setValues([line]);
-    } else {
-      appends.push(line);
-    }
+    var rev=nextRev_();
+    var line=toLine_(r,rev);
+    if (at) sh.getRange(at,1,1,HEAD.length).setValues([line]); else appends.push(line);
     saved++;
   }
-
-  if (appends.length) {
-    sh.getRange(sh.getLastRow() + 1, 1, appends.length, HEAD.length).setValues(appends);
-  }
-  sortByDate(sh);
-  return { saved: saved, skipped: skipped };
+  if (appends.length) sh.getRange(sh.getLastRow()+1,1,appends.length,HEAD.length).setValues(appends);
+  if (saved) sortByDate_(sh);
+  return {saved:saved,skipped:skipped,conflicts:conflicts};
 }
 
-function getAllRows_() {
-  var sh = sheet();
-  var last = sh.getLastRow();
-  if (last < 2) return [];
-  var values = sh.getRange(2, 1, last - 1, HEAD.length).getValues();
-  var tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
-  var out = [];
-  for (var i = 0; i < values.length; i++) {
-    var row = values[i];
-    if (!row[0]) continue;
-    var dateObj = row[1];
-    var updatedObj = row[10];
-    // 삭제(tombstone)된 행도 그대로 포함해서 반환한다.
-    // 다른 기기가 이 사실을 보고 자기 local 캐시에서도 지울 수 있어야 하기 때문이다.
-    // 화면에 삭제된 거래를 보이지 않게 하는 처리는 클라이언트(app.js)의 mergeServerData가 한다.
+function getAllResponse_(sinceRevParam) {
+  var sinceRev = Number(sinceRevParam);
+  var incremental = isFinite(sinceRev) && sinceRev > 0;
+  var rows = getAllRows_(incremental ? sinceRev : 0);
+  var m = meta_();
+  return {ok:true, appId:APP_ID, schemaVersion:SCHEMA_VERSION, storeId:m.storeId, serverTime:m.serverTime, cursor:m.cursor, incremental:incremental, rows:rows};
+}
+function getAllRows_(sinceRev) {
+  var sh=sheet_(), last=sh.getLastRow(); if (last<2) return [];
+  var vals=sh.getRange(2,1,last-1,HEAD.length).getValues();
+  var tz=SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), out=[];
+  for (var i=0;i<vals.length;i++) {
+    var row=vals[i]; if (!row[0]) continue;
+    var rev=Number(row[13])||0;
+    if (sinceRev && rev && rev <= sinceRev) continue;
+    if (sinceRev && !rev) continue;
     out.push({
-      id: row[0],
-      date: dateObj instanceof Date ? Utilities.formatDate(dateObj, tz, 'yyyy-MM-dd') : String(dateObj),
-      type: row[3],
-      amount: Number(row[4]) || 0,
-      cat: row[5],
-      sub: row[6],
-      pay: row[7],
-      memo: row[8],
-      fixed: row[9] === 'Y' || row[9] === true,
-      updated: updatedObj instanceof Date ? updatedObj.getTime() : (Number(updatedObj) || 0),
-      deleted: row[11] === 'Y' || row[11] === true
+      id:String(row[0]), date:formatDate_(row[1],tz), type:String(row[3]||''), amount:Number(row[4])||0,
+      cat:String(row[5]||''), sub:String(row[6]||''), pay:String(row[7]||''), memo:String(row[8]||''),
+      fixed:row[9]==='Y'||row[9]===true, updated:toMs_(row[10]), deleted:row[11]==='Y'||row[11]===true,
+      deviceId:String(row[12]||''), revision:rev
     });
   }
   return out;
 }
-
-/* ───────── 헬퍼 ───────── */
-
-function json(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+function formatDate_(v,tz) { return v instanceof Date ? Utilities.formatDate(v,tz,'yyyy-MM-dd') : String(v||''); }
+function toMs_(v) { return v instanceof Date ? v.getTime() : (Number(v)||0); }
+function toLine_(r,rev) {
+  var p=r.date.split('-'), d=new Date(Number(p[0]),Number(p[1])-1,Number(p[2]));
+  return [r.id,d,r.date.slice(0,7),r.type,r.amount,r.cat,r.sub,r.pay,r.memo,r.fixed?'Y':'',new Date(r.updated),r.deleted?'Y':'',r.deviceId,rev];
 }
 
-function toLine(r, updatedMs) {
-  var p = String(r.date || '').split('-');
-  var d = p.length === 3 ? new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])) : new Date();
-  return [
-    r.id,
-    d,
-    String(r.date || '').slice(0, 7),
-    r.type || '',
-    Number(r.amount) || 0,
-    r.cat || '',
-    r.sub || '',
-    r.pay || '',
-    r.memo || '',
-    r.fixed ? 'Y' : '',
-    new Date(updatedMs),
-    r.deleted ? 'Y' : ''
-  ];
-}
-
-function sheet() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sh = ss.getSheetByName(SHEET);
-  if (!sh) sh = ss.insertSheet(SHEET);
-  if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, HEAD.length).setValues([HEAD]);
-  } else {
-    // 이전 버전 시트(삭제 컬럼이 없던 시절)를 쓰던 경우, 부족한 헤더만 채워서
-    // 하위 호환으로 마이그레이션한다.
-    var curCols = sh.getLastColumn();
-    if (curCols < HEAD.length) {
-      sh.getRange(1, curCols + 1, 1, HEAD.length - curCols).setValues([HEAD.slice(curCols)]);
-    }
+function sheet_() {
+  var ss=SpreadsheetApp.getActiveSpreadsheet(), sh=ss.getSheetByName(SHEET); if (!sh) sh=ss.insertSheet(SHEET);
+  if (sh.getLastRow()===0) sh.getRange(1,1,1,HEAD.length).setValues([HEAD]);
+  else if (sh.getLastColumn()<HEAD.length) {
+    var c=sh.getLastColumn(); sh.getRange(1,c+1,1,HEAD.length-c).setValues([HEAD.slice(c)]);
   }
   return sh;
 }
+function sortByDate_(sh) { var last=sh.getLastRow(); if (last>2) sh.getRange(2,1,last-1,HEAD.length).sort([{column:2,ascending:false}]); }
+function json_(obj) { return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON); }
 
-function sortByDate(sh) {
-  var last = sh.getLastRow();
-  if (last > 2) sh.getRange(2, 1, last - 1, HEAD.length).sort([{ column: 2, ascending: false }]);
+function assignMissingRevisions_(sh) {
+  var last=sh.getLastRow(); if (last<2) return;
+  var vals=sh.getRange(2,14,last-1,1).getValues(), changed=false;
+  for (var i=0;i<vals.length;i++) if (!Number(vals[i][0])) { vals[i][0]=nextRev_(); changed=true; }
+  if (changed) sh.getRange(2,14,vals.length,1).setValues(vals);
 }
 
-/* ───────── 최초 1회 실행 ───────── */
-
 function setup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sh = sheet();
-
-  sh.getRange(1, 1, 1, HEAD.length)
-    .setFontWeight('bold').setBackground('#211E31').setFontColor('#EDEAF5');
-  sh.setFrozenRows(1);
-  sh.getRange('B:B').setNumberFormat('yyyy-mm-dd');
-  sh.getRange('E:E').setNumberFormat('#,##0');
-  sh.getRange('K:K').setNumberFormat('yyyy-mm-dd hh:mm');
-  sh.setColumnWidth(1, 110);
-  sh.setColumnWidth(9, 220);
-
-  // 아래 요약 시트들은 삭제(tombstone)된 행(L열='Y')을 집계에서 제외한다.
-  var m = ss.getSheetByName('월간요약') || ss.insertSheet('월간요약');
-  m.clear();
+  var ss=SpreadsheetApp.getActiveSpreadsheet(), sh=sheet_(); getStoreId_(); assignMissingRevisions_(sh);
+  sh.getRange(1,1,1,HEAD.length).setValues([HEAD]).setFontWeight('bold').setBackground('#211E31').setFontColor('#EDEAF5');
+  sh.setFrozenRows(1); sh.getRange('B:B').setNumberFormat('yyyy-mm-dd'); sh.getRange('E:E').setNumberFormat('#,##0'); sh.getRange('K:K').setNumberFormat('yyyy-mm-dd hh:mm');
+  sh.setColumnWidth(1,110); sh.setColumnWidth(9,220);
+  var m=ss.getSheetByName('월간요약')||ss.insertSheet('월간요약'); m.clear();
   m.getRange('A1').setValue('월별 흐름').setFontWeight('bold');
-  m.getRange('A2').setFormula(
-    "=IFERROR(QUERY(거래!A2:L, \"select C, sum(E) where D='수입' and L<>'Y' group by C order by C desc label C '월', sum(E) '수입'\",0),\"기록 없음\")"
-  );
-  m.getRange('D2').setFormula(
-    "=IFERROR(QUERY(거래!A2:L, \"select C, sum(E) where D='지출' and L<>'Y' group by C order by C desc label C '월', sum(E) '지출'\",0),\"\")"
-  );
+  m.getRange('A2').setFormula("=IFERROR(QUERY(거래!A2:N, \"select C, sum(E) where D='수입' and L<>'Y' group by C order by C desc label C '월', sum(E) '수입'\",0),\"기록 없음\")");
+  m.getRange('D2').setFormula("=IFERROR(QUERY(거래!A2:N, \"select C, sum(E) where D='지출' and L<>'Y' group by C order by C desc label C '월', sum(E) '지출'\",0),\"\")");
   m.getRange('G1').setValue('고정비만').setFontWeight('bold');
-  m.getRange('G2').setFormula(
-    "=IFERROR(QUERY(거래!A2:L, \"select C, sum(E) where D='지출' and J='Y' and L<>'Y' group by C order by C desc label C '월', sum(E) '고정비'\",0),\"\")"
-  );
-  m.getRange('B:B').setNumberFormat('#,##0');
-  m.getRange('E:E').setNumberFormat('#,##0');
-  m.getRange('H:H').setNumberFormat('#,##0');
-
-  var c = ss.getSheetByName('카테고리별') || ss.insertSheet('카테고리별');
-  c.clear();
-  c.getRange('A1').setValue('보고 싶은 달');
-  c.getRange('B1').setValue(Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyy-MM'));
-  c.getRange('B1').setFontWeight('bold');
-  c.getRange('A3').setFormula(
-    "=IFERROR(QUERY(거래!A2:L, \"select F, G, sum(E) where D='지출' and L<>'Y' and C='\"&$B$1&\"' group by F, G order by sum(E) desc label F '대분류', G '소분류', sum(E) '금액'\",0),\"기록 없음\")"
-  );
-  c.getRange('F3').setFormula(
-    "=IFERROR(QUERY(거래!A2:L, \"select H, sum(E) where D='지출' and L<>'Y' and C='\"&$B$1&\"' group by H order by sum(E) desc label H '결제수단', sum(E) '금액'\",0),\"\")"
-  );
-  c.getRange('C:C').setNumberFormat('#,##0');
-  c.getRange('G:G').setNumberFormat('#,##0');
-
-  SpreadsheetApp.getUi().alert('준비 끝. 이제 배포 > 새 배포 > 웹 앱으로 배포해줘.');
+  m.getRange('G2').setFormula("=IFERROR(QUERY(거래!A2:N, \"select C, sum(E) where D='지출' and J='Y' and L<>'Y' group by C order by C desc label C '월', sum(E) '고정비'\",0),\"\")");
+  m.getRange('B:B').setNumberFormat('#,##0'); m.getRange('E:E').setNumberFormat('#,##0'); m.getRange('H:H').setNumberFormat('#,##0');
+  var c=ss.getSheetByName('카테고리별')||ss.insertSheet('카테고리별'); c.clear();
+  c.getRange('A1').setValue('보고 싶은 달'); c.getRange('B1').setValue(Utilities.formatDate(new Date(),ss.getSpreadsheetTimeZone(),'yyyy-MM')).setFontWeight('bold');
+  c.getRange('A3').setFormula("=IFERROR(QUERY(거래!A2:N, \"select F, G, sum(E) where D='지출' and L<>'Y' and C='\"&$B$1&\"' group by F, G order by sum(E) desc label F '대분류', G '소분류', sum(E) '금액'\",0),\"기록 없음\")");
+  c.getRange('F3').setFormula("=IFERROR(QUERY(거래!A2:N, \"select H, sum(E) where D='지출' and L<>'Y' and C='\"&$B$1&\"' group by H order by sum(E) desc label H '결제수단', sum(E) '금액'\",0),\"\")");
+  c.getRange('C:C').setNumberFormat('#,##0'); c.getRange('G:G').setNumberFormat('#,##0');
+  SpreadsheetApp.getUi().alert('v3 준비 끝. 배포 관리에서 새 버전으로 다시 배포해줘.');
 }

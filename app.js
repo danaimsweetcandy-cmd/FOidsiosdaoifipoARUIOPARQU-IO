@@ -1,563 +1,95 @@
-/* ───────── 분류 ───────── */
-const CATS = {
-  지출: {
-    식비:      ['장보기','외식','카페','배달','술'],
-    생활:      ['생필품','의류','미용','세탁','가전가구','반려동물'],
-    주거통신:  ['월세','관리비','공과금','통신비','구독료'],
-    교통:      ['대중교통','택시','기차·버스','주유·주차'],
-    의료건강:  ['진료비','약국','보험료','운동'],
-    문화여가:  ['취미재료','게임','도서','영화·공연','여행','모임'],
-    자기계발:  ['강의','시험','장비','소프트웨어'],
-    경조사:    ['축의·부의','선물','기부'],
-    금융세금:  ['이자','수수료','세금','과태료'],
-    기타:      ['미분류']
-  },
-  수입: {
-    급여:      ['월급','상여','수당'],
-    부업:      ['외주','중고판매','원고료'],
-    환급지원:  ['의료비 환급','교통비 환급','세금 환급','지원금'],
-    금융수입:  ['이자','배당','투자수익'],
-    기타수입:  ['용돈','받은 선물','기타']
-  },
-  이체: {
-    저축:      ['적금','비상금'],
-    투자:      ['주식','연금'],
-    카드대금:  ['신용카드 결제'],
-    현금:      ['현금 인출','계좌 간 이동']
-  }
-};
-const PAYS = ['신용카드','체크카드','계좌이체','현금'];
-const DEFAULT_PRESETS = [
-  { type:'지출', amount:1550,  cat:'교통', sub:'대중교통', pay:'체크카드', memo:'', label:'지하철' },
-  { type:'지출', amount:4500,  cat:'식비', sub:'카페',     pay:'체크카드', memo:'', label:'카페' },
-  { type:'지출', amount:12000, cat:'식비', sub:'외식',     pay:'체크카드', memo:'', label:'점심' }
-];
+'use strict';
+const APP_VERSION='3.0.0', APP_ID='ledger', SCHEMA_VERSION=3, MAX_URL=6500, FETCH_TIMEOUT=15000;
+const CATS={지출:{식비:['장보기','외식','카페','배달','술'],생활:['생필품','의류','미용','세탁','가전가구','반려동물'],주거통신:['월세','관리비','공과금','통신비','구독료'],교통:['대중교통','택시','기차·버스','주유·주차'],의료건강:['진료비','약국','보험료','운동'],문화여가:['취미재료','게임','도서','영화·공연','여행','모임'],자기계발:['강의','시험','장비','소프트웨어'],경조사:['축의·부의','선물','기부'],금융세금:['이자','수수료','세금','과태료'],기타:['미분류']},수입:{급여:['월급','상여','수당'],부업:['외주','중고판매','원고료'],환급지원:['의료비 환급','교통비 환급','세금 환급','지원금'],금융수입:['이자','배당','투자수익'],기타수입:['용돈','받은 선물','기타']},이체:{저축:['적금','비상금'],투자:['주식','연금'],카드대금:['신용카드 결제'],현금:['현금 인출','계좌 간 이동']}};
+const PAYS=['신용카드','체크카드','계좌이체','현금'];
+const DEFAULT_PRESETS=[{type:'지출',amount:1550,cat:'교통',sub:'대중교통',pay:'체크카드',memo:'',label:'지하철'},{type:'지출',amount:4500,cat:'식비',sub:'카페',pay:'체크카드',memo:'',label:'카페'},{type:'지출',amount:12000,cat:'식비',sub:'외식',pay:'체크카드',memo:'',label:'점심'}];
+const K={tx:'lg.tx',cfg:'lg.cfg',pre:'lg.presets',pay:'lg.lastpay',draft:'lg.draft',meta:'lg.meta',device:'lg.deviceId',recovery:'lg.recovery',stamp:'lg.lastStamp',lease:'lg.syncLease',ui:'lg.ui'};
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+let startupWarnings=[];
+function safeSet(k,v){try{localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v));return true}catch(e){showToast('저장공간에 쓰지 못했어. 먼저 백업해줘.');return false}}
+function loadJson(k,d){const raw=localStorage.getItem(k);if(!raw)return d;try{return JSON.parse(raw)}catch(e){try{localStorage.setItem(`${k}.corrupt.${Date.now()}`,raw)}catch(_){}startupWarnings.push(`${k} 손상 데이터를 별도 보관했어.`);return d}}
+function getDeviceId(){let id=localStorage.getItem(K.device);if(!id){id=(crypto.randomUUID?crypto.randomUUID():`dev-${Date.now()}-${Math.random().toString(36).slice(2)}`);safeSet(K.device,id)}return id}
+const DEVICE_ID=getDeviceId(), TAB_ID=`tab-${Math.random().toString(36).slice(2)}`;
+function nextStamp(){const prev=Number(localStorage.getItem(K.stamp))||0;const n=Math.max(Date.now(),prev+1);safeSet(K.stamp,String(n));return n}
+function pad(n){return String(n).padStart(2,'0')} function todayStr(){const d=new Date();return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`}
+function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(s)))return false;const [y,m,d]=s.split('-').map(Number),x=new Date(y,m-1,d);return x.getFullYear()===y&&x.getMonth()===m-1&&x.getDate()===d}
+function won(n){return(n<0?'-':'')+Math.abs(Math.round(n)).toLocaleString('ko-KR')} function ymOf(t){return(t.date||'').slice(0,7)}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function compareVer(a,b){const au=Number(a?.updated)||0,bu=Number(b?.updated)||0;if(au!==bu)return au>bu?1:-1;const ad=String(a?.deviceId||''),bd=String(b?.deviceId||'');return ad===bd?0:(ad>bd?1:-1)}
+function normalizeTx(t){if(!t||!t.id||!validDate(t.date)||!['지출','수입','이체'].includes(t.type)||!(Number(t.amount)>0))return null;return{id:String(t.id),date:t.date,type:t.type,amount:Math.round(Number(t.amount)),cat:String(t.cat||''),sub:String(t.sub||''),pay:String(t.pay||''),memo:String(t.memo||'').slice(0,200),fixed:!!t.fixed,deleted:!!t.deleted,updated:Number(t.updated)||0,deviceId:String(t.deviceId||''),synced:t.synced===true}}
+function migrate(){let raw=loadJson(K.tx,[]);if(!Array.isArray(raw))raw=[];const out=[];for(const t of raw){const n=normalizeTx(t);if(n)out.push(n)}TX=out;META=Object.assign({schemaVersion:SCHEMA_VERSION,lastSuccess:0},loadJson(K.meta,{}));META.schemaVersion=SCHEMA_VERSION;safeSet(K.meta,META);safeSet(K.tx,TX)}
+let TX=[], META={}, CFG=Object.assign({url:'',token:'',auto:true,storeId:'',cursor:0},loadJson(K.cfg,{})), PRE=loadJson(K.pre,DEFAULT_PRESETS);if(!Array.isArray(PRE))PRE=DEFAULT_PRESETS.slice();migrate();
+const saveTx=()=>safeSet(K.tx,TX), saveCfg=()=>safeSet(K.cfg,CFG), savePre=()=>safeSet(K.pre,PRE), live=()=>TX.filter(t=>!t.deleted);
+let toastT, undoT, lastUndo=null, submitLock=false, syncBusy=false, syncError='', syncPromise=null, bc=null, catOrderCache={};
+function showToast(msg,ms=2300){const el=$('#toast');if(!el)return;el.textContent=msg;el.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,ms)}
+function buzz(ms){try{navigator.vibrate?.(ms)}catch(_){}}
+function pendingCount(){return TX.filter(t=>!t.synced).length}
+function syncText(){if(!CFG.url)return '연동 안 함';if(syncBusy)return `동기화 중 · 대기 ${pendingCount()}건`;if(syncError)return `조치 필요 · ${syncError}`;if(pendingCount())return navigator.onLine===false?`오프라인 · 기기에 안전하게 저장됨 · ${pendingCount()}건 대기`:`전송 대기 ${pendingCount()}건`;return `동기화 완료${META.lastSuccess?` · ${new Date(META.lastSuccess).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}`:''}`}
+function refreshSyncUI(){const dot=$('#syncDot'),btn=$('#syncBtn');let s='';if(CFG.url){s=syncBusy?'busy':syncError?'err':pendingCount()?'pending':'ok'}dot.className='dot'+(s?' '+s:'');const txt=syncText();btn?.setAttribute('aria-label','동기화 상태: '+txt);btn?.setAttribute('title',txt);if($('#syncMsg'))$('#syncMsg').textContent=txt}
+function saveRecovery(item,reason){if(!item||!item.id)return;let arr=loadJson(K.recovery,[]);const cutoff=Date.now()-7*86400000;arr=arr.filter(x=>x&&x.savedAt>cutoff);arr.unshift({savedAt:Date.now(),reason,item});safeSet(K.recovery,arr.slice(0,100))}
+function requestPersistentStorage(){if(navigator.storage?.persist){navigator.storage.persist().catch(()=>{})}}
+async function storageInfo(){if(!navigator.storage?.estimate)return '';const e=await navigator.storage.estimate();if(!e.quota)return '';return `저장공간 ${(e.usage/1048576).toFixed(1)}MB / ${(e.quota/1048576).toFixed(0)}MB${await navigator.storage.persisted?.()?' · 보존 저장소':''}`}
 
-// GET query string 하나에 담아 보낼 거래 최대 건수.
-// Apps Script GET 요청의 URL 길이 한계 때문에 너무 크게 잡지 않는다.
-const GAS_CHUNK_SIZE = 10;
+const S={type:'지출',digits:'',cat:'식비',sub:'',pay:loadJson(K.pay,'체크카드'),date:todayStr(),fixed:false,editId:null};let ui=loadJson(K.ui,{}),curYM=/^\d{4}-\d{2}$/.test(ui.curYM||'')?ui.curYM:todayStr().slice(0,7),currentView='add';
+function accentOf(type){return type==='수입'?'var(--in)':type==='이체'?'var(--tr)':'var(--out)'}function signOf(type){return type==='수입'?'+':type==='이체'?'':'-'}
+function computeCatOrders(){for(const type of Object.keys(CATS)){const base=Object.keys(CATS[type]),freq={};for(const t of live())if(t.type===type)freq[t.cat]=(freq[t.cat]||0)+1;catOrderCache[type]=base.slice().sort((a,b)=>(freq[b]||0)-(freq[a]||0)||base.indexOf(a)-base.indexOf(b))}}
+computeCatOrders();
+function renderSeg(){const i=['지출','수입','이체'].indexOf(S.type);$$('.seg-b').forEach(b=>{const on=b.dataset.type===S.type;b.classList.toggle('is-on',on);b.setAttribute('aria-selected',String(on))});$('#segInd').style.transform=`translateX(${i*100}%)`;document.documentElement.style.setProperty('--accent',accentOf(S.type));$('#amSign').textContent=signOf(S.type);$('#payRow').classList.toggle('off',S.type==='이체');$('#fixedWrap').classList.toggle('off',S.type!=='지출')}
+function renderAmount(pop){$('#amNum').textContent=S.digits?Number(S.digits).toLocaleString('ko-KR'):'0';$('#amountBox').classList.toggle('zero',!S.digits);$('#saveBtn').disabled=!S.digits;if(pop){const box=$('#amountBox');box.classList.remove('pop');void box.offsetWidth;box.classList.add('pop')}}
+function renderCats(){const keys=catOrderCache[S.type]||Object.keys(CATS[S.type]);if(!keys.includes(S.cat)){S.cat=keys[0];S.sub=''}$('#catGrid').innerHTML=keys.map(c=>`<button class="cat${c===S.cat?' is-on':''}" data-cat="${esc(c)}" type="button" aria-pressed="${c===S.cat}">${esc(c)}</button>`).join('');renderSubs()}
+function renderSubs(){const subs=CATS[S.type][S.cat]||[];$('#subRow').innerHTML=subs.map(s=>`<button class="sub${s===S.sub?' is-on':''}" data-sub="${esc(s)}" type="button" aria-pressed="${s===S.sub}">${esc(s)}</button>`).join('')}
+function renderPays(){$('#payRow').innerHTML=PAYS.map(p=>`<button class="pay${p===S.pay?' is-on':''}" data-pay="${esc(p)}" type="button" aria-pressed="${p===S.pay}">${esc(p)}</button>`).join('')}
+function renderPresets(){$('#presetRow').innerHTML=PRE.map((p,i)=>`<button class="preset" data-pre="${i}" type="button"><span class="p-c">${esc(p.label||p.sub||p.cat)}</span><b>${won(p.amount)}</b></button>`).join('')}
+function renderAll(){renderSeg();renderAmount();renderCats();renderPays();renderPresets();$('#datePick').value=S.date;$('#fixedChk').checked=S.fixed;$('#editBar').hidden=!S.editId;refreshSyncUI()}
+function draftObject(){return{type:S.type,digits:S.digits,cat:S.cat,sub:S.sub,pay:S.pay,date:S.date,fixed:$('#fixedChk')?.checked||false,memo:$('#memo')?.value||'',savedAt:Date.now()}}
+function saveDraft(){if(S.editId)return;const d=draftObject();if(!d.digits&&!d.memo){localStorage.removeItem(K.draft);return}safeSet(K.draft,d)}
+function restoreDraft(){const d=loadJson(K.draft,null);if(!d||Date.now()-(d.savedAt||0)>7*86400000)return;Object.assign(S,{type:CATS[d.type]?d.type:'지출',digits:String(d.digits||''),cat:String(d.cat||'식비'),sub:String(d.sub||''),pay:String(d.pay||S.pay),date:validDate(d.date)?d.date:todayStr(),fixed:!!d.fixed});$('#memo').value=String(d.memo||'').slice(0,80)}
+function clearDraft(){localStorage.removeItem(K.draft)}
+function resetInput(keepType=true){S.digits='';S.sub='';S.date=todayStr();S.fixed=false;S.editId=null;if(!keepType)S.type='지출';$('#memo').value='';clearDraft();renderAll()}
+function applyPreset(p){if(!p)return;S.type=CATS[p.type]?p.type:'지출';S.cat=p.cat||Object.keys(CATS[S.type])[0];S.sub=p.sub||'';S.digits=String(Math.round(Number(p.amount)||0));if(p.pay)S.pay=p.pay;$('#memo').value=String(p.memo||'').slice(0,80);renderAll();saveDraft();buzz(8)}
+function commit(){if(submitLock)return;const amt=Number(S.digits);if(!amt)return showToast('금액을 입력해줘');if(amt>9999999999)return showToast('금액은 99억 9,999만 9,999원까지 입력할 수 있어');submitLock=true;setTimeout(()=>submitLock=false,450);const row={id:S.editId||((crypto.randomUUID&&crypto.randomUUID())||`${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`),date:S.date,type:S.type,amount:amt,cat:S.cat,sub:S.sub||'',pay:S.type==='이체'?'':S.pay,memo:$('#memo').value.trim().slice(0,80),fixed:S.type==='지출'&&$('#fixedChk').checked,deleted:false,synced:false,updated:nextStamp(),deviceId:DEVICE_ID};const i=TX.findIndex(t=>t.id===row.id),prev=i>=0?TX[i]:null;if(i>=0)TX[i]=row;else TX.unshift(row);if(!saveTx()){if(i>=0)TX[i]=prev;else TX=TX.filter(t=>t.id!==row.id);return}if(S.type!=='이체'){S.pay=row.pay;safeSet(K.pay,JSON.stringify(row.pay))}curYM=row.date.slice(0,7);safeSet(K.ui,{curYM});showToast(`${signOf(row.type)}${won(row.amount)}원 ${i>=0?'수정했어':'기록했어'}`);buzz(14);resetInput(S.type==='지출');renderTop();renderList();renderStat();broadcast('data');if(CFG.auto&&CFG.url)syncNow(true)}
+function removeTx(id){const t=TX.find(x=>x.id===id&&!x.deleted);if(!t)return;lastUndo=window.structuredClone?window.structuredClone(t):JSON.parse(JSON.stringify(t));t.deleted=true;t.synced=false;t.updated=nextStamp();t.deviceId=DEVICE_ID;if(!saveTx())return;resetInput(true);renderTop();renderList();renderStat();showUndo('삭제했어',()=>undoDelete(lastUndo));broadcast('data');if(CFG.auto&&CFG.url)syncNow(true)}
+function undoDelete(snapshot){if(!snapshot)return;let t=TX.find(x=>x.id===snapshot.id);const restored={...snapshot,deleted:false,synced:false,updated:nextStamp(),deviceId:DEVICE_ID};if(t)Object.assign(t,restored);else TX.unshift(restored);if(saveTx()){renderTop();renderList();renderStat();showToast('삭제를 취소했어');broadcast('data');if(CFG.auto&&CFG.url)syncNow(true)}}
+function showUndo(text,fn){clearTimeout(undoT);$('#undoText').textContent=text;$('#undoBar').hidden=false;const handler=()=>{clearTimeout(undoT);$('#undoBar').hidden=true;$('#undoBtn').removeEventListener('click',handler);fn()};$('#undoBtn').onclick=handler;undoT=setTimeout(()=>{$('#undoBar').hidden=true;$('#undoBtn').onclick=null},5000)}
+function editTx(id){const t=TX.find(x=>x.id===id&&!x.deleted);if(!t)return;S.editId=t.id;S.type=t.type;S.digits=String(t.amount);S.cat=t.cat;S.sub=t.sub;S.pay=t.pay||S.pay;S.date=t.date;S.fixed=!!t.fixed;$('#memo').value=t.memo||'';go('add');renderAll();history.pushState({view:'add',edit:true},'')}
+function monthsAvailable(){const set=new Set(live().map(ymOf).filter(Boolean));set.add(todayStr().slice(0,7));return[...set].sort().reverse()}
+function renderTop(){const rows=live().filter(t=>ymOf(t)===curYM),out=rows.filter(t=>t.type==='지출').reduce((a,t)=>a+t.amount,0),inc=rows.filter(t=>t.type==='수입').reduce((a,t)=>a+t.amount,0);$('#sumOut').textContent=won(out);$('#sumIn').textContent=won(inc);const[y,m]=curYM.split('-');$('#monthLabel').textContent=curYM===todayStr().slice(0,7)?'이번 달':`${y.slice(2)}년 ${Number(m)}월`;const sel=$('#monthSel');if(sel)sel.innerHTML=monthsAvailable().map(ym=>`<option value="${ym}"${ym===curYM?' selected':''}>${ym.slice(0,4)}년 ${Number(ym.slice(5,7))}월</option>`).join('')}
+function renderList(){const rows=live().filter(t=>ymOf(t)===curYM).sort((a,b)=>b.date.localeCompare(a.date)||compareVer(b,a));if(!rows.length){$('#listWrap').innerHTML='<div class="empty">이 달은 아직 비어 있어.<br><button class="btn" data-empty-add type="button">첫 기록 남기기</button></div>';return}const by={};for(const t of rows)(by[t.date]??=[]).push(t);const wk=['일','월','화','수','목','금','토'];$('#listWrap').innerHTML=Object.keys(by).map(d=>{const day=by[d],net=day.reduce((a,t)=>a+(t.type==='수입'?t.amount:t.type==='지출'?-t.amount:0),0),dt=new Date(d+'T00:00:00');return`<div class="daygroup"><div class="dayhead"><span>${Number(d.slice(5,7))}월 ${Number(d.slice(8,10))}일 ${wk[dt.getDay()]}</span><span>${net>=0?'+':''}${won(net)}</span></div>${day.map(t=>`<button class="row" data-id="${esc(t.id)}" type="button"><span class="r-p${t.synced?' hide':''}" aria-hidden="true"></span><span class="r-main"><span class="r-t">${esc(t.memo||t.sub||t.cat)}</span><span class="r-s">${esc(t.cat)}${t.sub?' · '+esc(t.sub):''}${t.pay?' · '+esc(t.pay):''}${t.fixed?' · 고정비':''}</span></span><span class="r-a ${t.type==='수입'?'in':t.type==='이체'?'tr':'out'}">${signOf(t.type)}${won(t.amount)}</span></button>`).join('')}</div>`}).join('')}
+function renderStat(){const rows=live().filter(t=>ymOf(t)===curYM),out=rows.filter(t=>t.type==='지출'),inc=rows.filter(t=>t.type==='수입'),sOut=out.reduce((a,t)=>a+t.amount,0),sInc=inc.reduce((a,t)=>a+t.amount,0),fixed=out.filter(t=>t.fixed).reduce((a,t)=>a+t.amount,0);if(!rows.length){$('#statWrap').innerHTML='<p class="empty">이 달 기록이 없어.</p>';return}const group=a=>{const g={};for(const t of a)g[t.cat]=(g[t.cat]||0)+t.amount;return Object.entries(g).sort((x,y)=>y[1]-x[1])},bars=(list,total,color)=>list.map(([c,v])=>`<div class="bar"><div class="bar-h"><span>${esc(c)} <em>${total?Math.round(v/total*100):0}%</em></span><span>${won(v)}</span></div><div class="bar-t"><div class="bar-f" style="width:${total?v/total*100:0}%;background:${color}"></div></div></div>`).join('');$('#statWrap').innerHTML=`<div class="bignum"><div class="bn"><span>수입</span><strong style="color:var(--in)">${won(sInc)}</strong></div><div class="bn"><span>지출</span><strong style="color:var(--out)">${won(sOut)}</strong></div><div class="bn"><span>남은 돈</span><strong>${won(sInc-sOut)}</strong></div></div><div class="statsec"><h2>지출${fixed?` · 고정비 ${won(fixed)}`:''}</h2>${bars(group(out),sOut,'var(--out)')||'<p class="hint">지출 기록 없음</p>'}</div><div class="statsec"><h2>수입</h2>${bars(group(inc),sInc,'var(--in)')||'<p class="hint">수입 기록 없음</p>'}</div>`}
 
-/* ───────── 저장소 ───────── */
-const K = { tx:'lg.tx', cfg:'lg.cfg', pre:'lg.presets', pay:'lg.lastpay' };
-const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
-const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { toast('저장 공간이 가득 찼어. 백업 후 정리해줘.'); return false; } };
+class SyncErr extends Error{constructor(code,msg,transient=false){super(msg);this.code=code;this.transient=transient}}
+function validateServer(data){if(!data||data.ok!==true)throw new SyncErr(data?.code||'SERVER',data?.error||'서버 응답 오류',!['AUTH','ACTION'].includes(data?.code));if(data.appId&&data.appId!==APP_ID)throw new SyncErr('WRONG_APP','이 주소는 가계부 서버가 아니야');if(data.schemaVersion&&Number(data.schemaVersion)>SCHEMA_VERSION)throw new SyncErr('NEW_SCHEMA','앱을 먼저 업데이트해줘');return data}
+function buildUrl(action,payload,extra={}){const p=new URLSearchParams({action,token:CFG.token||'',...extra});if(payload!==undefined)p.set('payload',JSON.stringify(payload));return CFG.url+'?'+p.toString()}
+async function oneFetch(url){const c=new AbortController(),tm=setTimeout(()=>c.abort(),FETCH_TIMEOUT);try{const r=await fetch(url,{signal:c.signal,cache:'no-store'});const text=await r.text();let d;try{d=JSON.parse(text)}catch(_){throw new SyncErr('BAD_JSON','시트가 JSON이 아닌 응답을 보냈어')}return validateServer(d)}catch(e){if(e.name==='AbortError')throw new SyncErr('TIMEOUT','서버 응답 시간이 초과됐어',true);if(e instanceof SyncErr)throw e;throw new SyncErr('NETWORK',navigator.onLine===false?'오프라인이야. 기기에는 안전하게 저장돼 있어.':'네트워크 연결에 실패했어',true)}finally{clearTimeout(tm)}}
+async function callGas(action,payload,extra={},retry=true){const url=buildUrl(action,payload,extra);if(url.length>MAX_URL)throw new SyncErr('URL_TOO_LONG','한 번에 보낼 내용이 너무 길어');const waits=retry?[0,650,1700]:[0];let last;for(const w of waits){if(w)await new Promise(r=>setTimeout(r,w+Math.random()*250));try{return await oneFetch(url)}catch(e){last=e;if(!e.transient)break}}throw last}
+function checkClock(serverTime){const diff=Math.abs(Date.now()-Number(serverTime||Date.now()));META.clockSkew=diff>5*60*1000?diff:0;safeSet(K.meta,META);if(META.clockSkew)showToast('기기 시간이 서버와 크게 달라. 날짜·시간 설정을 확인해줘.',4000)}
+async function verifyConnection(){if(!CFG.url)throw new SyncErr('NO_URL','웹앱 주소를 먼저 넣어줘');const d=await callGas('meta',undefined,{},false);if(d.appId!==APP_ID)throw new SyncErr('WRONG_APP','이 주소는 가계부 서버가 아니야');if(CFG.storeId&&CFG.storeId!==d.storeId)throw new SyncErr('WRONG_STORE','기존과 다른 가계부 시트야. 실수로 다른 주소를 넣지 않았는지 확인해줘.');CFG.storeId=d.storeId;CFG.cursor=Number(CFG.cursor)||0;saveCfg();checkClock(d.serverTime);return d}
+function rowForServer(t){return{id:t.id,date:t.date,type:t.type,amount:t.amount,cat:t.cat,sub:t.sub,pay:t.pay,memo:t.memo,fixed:!!t.fixed,deleted:!!t.deleted,updated:t.updated,deviceId:t.deviceId||DEVICE_ID}}
+function splitBatches(rows){const out=[];let cur=[];for(const r of rows){const test=cur.concat(r),len=buildUrl('upsert',{rows:test}).length;if(len>MAX_URL&&cur.length){out.push(cur);cur=[r]}else cur=test;if(buildUrl('upsert',{rows:cur}).length>MAX_URL)throw new SyncErr('URL_TOO_LONG','메모가 너무 길어 전송할 수 없어')}if(cur.length)out.push(cur);return out}
+function acquireLease(){const now=Date.now(),v=loadJson(K.lease,null);if(v&&v.owner!==TAB_ID&&v.until>now)return false;return safeSet(K.lease,{owner:TAB_ID,until:now+30000})}
+function releaseLease(){const v=loadJson(K.lease,null);if(v?.owner===TAB_ID)localStorage.removeItem(K.lease)}
+function mergeServerRows(rows){const by=new Map(TX.map(t=>[t.id,t]));for(const raw of rows||[]){const s=normalizeTx({...raw,synced:true});if(!s)continue;const l=by.get(s.id);if(!l){if(!s.deleted)by.set(s.id,s);continue}const cmp=compareVer(s,l);if(cmp>0||cmp===0){if(!l.synced&&cmp>0&&!l.deleted)saveRecovery(l,'다른 기기의 최신 수정이 적용됨');if(s.deleted){by.delete(s.id)}else by.set(s.id,{...s,synced:true})}else if(l.deleted&&!l.synced){by.set(l.id,l)}else if(!l.synced){by.set(l.id,l)}}TX=[...by.values()];saveTx()}
+async function pullFromServer(quiet=false,full=false){if(!CFG.url)return false;try{syncBusy=true;syncError='';refreshSyncUI();const extra={};if(!full&&Number(CFG.cursor)>0)extra.sinceRev=String(CFG.cursor);const d=await callGas('getAll',undefined,extra);if(CFG.storeId&&d.storeId!==CFG.storeId)throw new SyncErr('WRONG_STORE','연결된 시트가 바뀌었어');CFG.storeId=d.storeId;checkClock(d.serverTime);mergeServerRows(d.rows||[]);CFG.cursor=Number(d.cursor)||CFG.cursor||0;META.lastSuccess=Date.now();safeSet(K.meta,META);saveCfg();renderTop();renderList();renderStat();broadcast('data');return true}catch(e){syncError=e.message;if(!quiet)showToast(e.message,3500);return false}finally{syncBusy=false;refreshSyncUI();if(currentView==='set')renderSettings()}}
+async function flushPending(quiet=false){const pending=TX.filter(t=>!t.synced).map(t=>JSON.parse(JSON.stringify(t)));if(!pending.length)return{count:0,conflicts:false};let count=0,conflicts=false;for(const batch of splitBatches(pending)){const d=await callGas('upsert',{rows:batch.map(rowForServer)});if((d.conflicts||[]).length)conflicts=true;for(const snap of batch){const cur=TX.find(t=>t.id===snap.id);if(cur&&compareVer(cur,snap)===0){cur.synced=true;count++}}if(!saveTx())throw new SyncErr('LOCAL_SAVE','서버 전송 후 로컬 상태 저장에 실패했어');CFG.cursor=Math.max(Number(CFG.cursor)||0,Number(d.cursor)||0);saveCfg()}return{count,conflicts}}
+async function syncNow(quiet=false,full=false){if(syncPromise)return syncPromise;if(!CFG.url){if(!quiet)showToast('설정에서 웹앱 주소를 넣어줘');return false}if(!acquireLease()){if(!quiet)showToast('다른 앱 창에서 동기화 중이야');return false}syncPromise=(async()=>{syncBusy=true;syncError='';refreshSyncUI();try{await verifyConnection();const r=await flushPending(quiet);await pullFromServer(true,full||r.conflicts);META.lastSuccess=Date.now();safeSet(K.meta,META);if(!quiet)showToast(r.count?`${r.count}건 동기화했어`:'최신 상태야');return true}catch(e){syncError=e.message;if(!quiet||e.code==='AUTH'||e.code==='WRONG_APP'||e.code==='WRONG_STORE')showToast(e.message,3800);return false}finally{syncBusy=false;syncPromise=null;releaseLease();refreshSyncUI();if(currentView==='set')renderSettings()}})();return syncPromise}
 
-let TX  = load(K.tx, []);
-let CFG = Object.assign({ url:'', token:'', auto:true }, load(K.cfg, {}));
-let PRE = load(K.pre, DEFAULT_PRESETS);
+function download(name,text,mime,bom=false){const blob=new Blob([bom?'\ufeff':'',text],{type:mime}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)}
+function toCsv(){const q=v=>`"${String(v??'').replace(/"/g,'""')}"`,head=['id','날짜','유형','금액','대분류','소분류','결제수단','메모','고정비'],body=live().sort((a,b)=>a.date.localeCompare(b.date)).map(t=>[t.id,t.date,t.type,t.amount,t.cat,t.sub,t.pay,t.memo,t.fixed?'Y':''].map(q).join(','));return[head.map(q).join(','),...body].join('\r\n')}
+function validBackupTx(t){return normalizeTx({...t,synced:false})}
+async function importBackup(file){let text=(await file.text()).replace(/^\uFEFF/,'');let d;try{d=JSON.parse(text)}catch(_){throw new Error('JSON 형식을 읽지 못했어')}if(!d||!Array.isArray(d.tx))throw new Error('가계부 백업 파일이 아니야');const map=new Map(TX.map(t=>[t.id,t]));let add=0,update=0,bad=0;for(const raw of d.tx){const n=validBackupTx(raw);if(!n){bad++;continue}const old=map.get(n.id);n.synced=false;if(!old){map.set(n.id,n);add++}else if(compareVer(n,old)>0){map.set(n.id,n);update++}}const msg=`백업 확인\n새 항목 ${add}건\n더 최신인 항목 ${update}건\n건너뛸 잘못된 항목 ${bad}건\n\n불러올까?`;if(!confirm(msg))return;TX=[...map.values()];if(Array.isArray(d.presets))PRE=d.presets.slice(0,100);if(!saveTx()||!savePre())throw new Error('로컬 저장에 실패했어');computeCatOrders();renderAll();renderTop();renderList();renderStat();renderSettings();showToast(`${add+update}건 반영했어`);broadcast('data');if(CFG.url)syncNow(true,true)}
+function renderSettings(){$('#cfgUrl').value=CFG.url;$('#cfgToken').value=CFG.token;$('#cfgAuto').checked=!!CFG.auto;$('#presetEdit').innerHTML=PRE.map((p,i)=>`<div class="pe"><span>${esc(p.label||p.sub||p.cat)} · ${won(p.amount)}원 · ${esc(p.cat)}${p.sub?'/'+esc(p.sub):''}</span><button data-del="${i}" type="button" aria-label="자주 쓰는 항목 삭제">×</button></div>`).join('')||'<p class="hint">등록된 항목 없음</p>';$('#dataMsg').textContent=`화면에 보이는 거래 ${live().length}건 · 전송 대기 ${pendingCount()}건 · 충돌 복구본 ${loadJson(K.recovery,[]).length}건`;$('#appInfo').textContent=`가계부 v${APP_VERSION} · 데이터 schema ${SCHEMA_VERSION}${CFG.storeId?' · 서버 확인됨':''}`;storageInfo().then(s=>{$('#storageMsg').textContent=s});refreshSyncUI()}
+const scrollPos={};function go(view,push=true){if(!['add','list','stat','set'].includes(view))view='add';const old=currentView;if(old)scrollPos[old]=$(`#view-${old==='set'?'set':old}`)?.scrollTop||0;currentView=view;$$('.view').forEach(v=>v.hidden=v.dataset.view!==view);$$('.tab').forEach(b=>{const on=b.dataset.go===view;b.classList.toggle('is-on',on);on?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current')});if(view==='list')renderList();if(view==='stat')renderStat();if(view==='set')renderSettings();if(push&&history.state?.view!==view)history.pushState({view},'',location.pathname+location.search);requestAnimationFrame(()=>{const el=$(`#view-${view==='set'?'set':view}`);if(el)el.scrollTop=scrollPos[view]||0})}
+function broadcast(type){try{bc?.postMessage({type,from:TAB_ID})}catch(_){}}
+function reloadShared(){const fresh=loadJson(K.tx,TX);if(Array.isArray(fresh)){TX=fresh.map(normalizeTx).filter(Boolean);renderTop();renderList();renderStat();refreshSyncUI()}}
 
-const saveTx  = () => save(K.tx, TX);
-const saveCfg = () => save(K.cfg, CFG);
-const savePre = () => save(K.pre, PRE);
-
-/* ───────── 유틸 ───────── */
-const $  = s => document.querySelector(s);
-const $$ = s => [...document.querySelectorAll(s)];
-const won = n => (n < 0 ? '-' : '') + Math.abs(Math.round(n)).toLocaleString('ko-KR');
-const pad = n => String(n).padStart(2, '0');
-const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
-const ymOf = t => (t.date || '').slice(0, 7);
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const live = () => TX.filter(t => !t.deleted);
-
-let toastT;
-function toast(msg) {
-  const el = $('#toast');
-  el.textContent = msg; el.hidden = false;
-  clearTimeout(toastT);
-  toastT = setTimeout(() => { el.hidden = true; }, 2000);
+function bind(){const sel=document.createElement('select');sel.id='monthSel';sel.setAttribute('aria-label','월 선택');$('#monthPick').appendChild(sel);sel.addEventListener('change',()=>{curYM=sel.value;safeSet(K.ui,{curYM});renderTop();renderList();renderStat()});
+$('#keypad').addEventListener('click',e=>{const b=e.target.closest('.k');if(!b)return;if(b.id==='saveBtn')return commit();const k=b.dataset.k;if(k==='del')S.digits=S.digits.slice(0,-1);else if(S.digits!==''||!/^0+$/.test(k)){if(S.digits.length+k.length<=10)S.digits+=k;else{showToast('금액은 최대 10자리까지 입력할 수 있어');buzz(20)}}S.digits=S.digits.replace(/^0+/,'');renderAmount(true);saveDraft();buzz(6)});
+$('#keypad').addEventListener('contextmenu',e=>{const b=e.target.closest('[data-k="del"]');if(b){e.preventDefault();S.digits='';renderAmount(true);saveDraft();buzz(12)}});
+$('.seg').addEventListener('click',e=>{const b=e.target.closest('.seg-b');if(!b)return;S.type=b.dataset.type;S.sub='';renderSeg();renderCats();saveDraft()});$('#catGrid').addEventListener('click',e=>{const b=e.target.closest('.cat');if(!b)return;S.cat=b.dataset.cat;S.sub='';renderCats();saveDraft();buzz(6)});$('#subRow').addEventListener('click',e=>{const b=e.target.closest('.sub');if(!b)return;S.sub=S.sub===b.dataset.sub?'':b.dataset.sub;renderSubs();saveDraft();buzz(6)});$('#payRow').addEventListener('click',e=>{const b=e.target.closest('.pay');if(!b)return;S.pay=b.dataset.pay;renderPays();saveDraft();buzz(6)});$('#presetRow').addEventListener('click',e=>{const b=e.target.closest('.preset');if(b)applyPreset(PRE[Number(b.dataset.pre)])});$('#datePick').addEventListener('change',e=>{S.date=e.target.value||todayStr();saveDraft()});$('#memo').addEventListener('input',saveDraft);$('#memo').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();commit()}});$('#fixedChk').addEventListener('change',saveDraft);$('#editDel').addEventListener('click',()=>S.editId&&removeTx(S.editId));$('#editCancel').addEventListener('click',()=>resetInput(true));
+$('#listWrap').addEventListener('click',e=>{if(e.target.closest('[data-empty-add]'))return go('add');const r=e.target.closest('.row');if(r)editTx(r.dataset.id)});$$('.tab').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));$('#syncBtn').addEventListener('click',()=>syncNow(false));
+$('#cfgUrl').addEventListener('change',e=>{CFG.url=e.target.value.trim();CFG.cursor=0;syncError='';saveCfg();refreshSyncUI()});$('#cfgToken').addEventListener('change',e=>{CFG.token=e.target.value.trim();syncError='';saveCfg()});$('#cfgAuto').addEventListener('change',e=>{CFG.auto=e.target.checked;saveCfg()});$('#toggleToken').addEventListener('click',()=>{const i=$('#cfgToken'),show=i.type==='password';i.type=show?'text':'password';$('#toggleToken').textContent=show?'숨기기':'보기';$('#toggleToken').setAttribute('aria-pressed',String(show))});$('#testConn').addEventListener('click',async()=>{try{syncBusy=true;refreshSyncUI();await verifyConnection();showToast('이 가계부 시트에 정상 연결됐어');syncError=''}catch(e){syncError=e.message;showToast(e.message,3500)}finally{syncBusy=false;refreshSyncUI();renderSettings()}});$('#syncNow').addEventListener('click',()=>syncNow(false));$('#fullSync').addEventListener('click',()=>syncNow(false,true));
+$('#presetAdd').addEventListener('click',()=>{if(!S.digits)return showToast('입력 탭에서 금액과 분류를 먼저 정해줘');PRE.push({type:S.type,amount:Number(S.digits),cat:S.cat,sub:S.sub,pay:S.pay,memo:$('#memo').value.trim(),label:S.sub||S.cat});if(savePre()){renderPresets();renderSettings();showToast('추가했어')}});$('#presetEdit').addEventListener('click',e=>{const b=e.target.closest('[data-del]');if(!b)return;PRE.splice(Number(b.dataset.del),1);savePre();renderPresets();renderSettings()});$('#expCsv').addEventListener('click',()=>download(`가계부_${todayStr()}.csv`,toCsv(),'text/csv;charset=utf-8',true));$('#expJson').addEventListener('click',()=>download(`가계부_백업_${todayStr()}.json`,JSON.stringify({appId:APP_ID,schemaVersion:SCHEMA_VERSION,exportedAt:Date.now(),tx:TX,presets:PRE},null,2),'application/json;charset=utf-8'));$('#impJson').addEventListener('click',()=>$('#impFile').click());$('#impFile').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{await importBackup(f)}catch(err){showToast(err.message,3500)}e.target.value=''});$('#wipe').addEventListener('click',()=>{if(!confirm('이 기기의 로컬 캐시만 초기화할까?\n시트 데이터는 지워지지 않고 다음 동기화 때 다시 내려와.'))return;TX=[];CFG.cursor=0;saveTx();saveCfg();clearDraft();renderAll();renderTop();renderList();renderStat();renderSettings();showToast('로컬 캐시를 초기화했어');broadcast('data')});
+window.addEventListener('online',()=>{syncError='';refreshSyncUI();if(CFG.url)syncNow(true)});window.addEventListener('storage',e=>{if([K.tx,K.cfg,K.lease].includes(e.key))reloadShared()});window.addEventListener('popstate',e=>{if(S.editId){resetInput(true);return}go(e.state?.view||'add',false)});document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(!S.editId&&!loadJson(K.draft,null)&&S.date!==todayStr()){S.date=todayStr();$('#datePick').value=S.date}if(CFG.url)syncNow(true)}});navigator.serviceWorker?.addEventListener('message',e=>{if(e.data?.type==='APP_UPDATED')showToast('앱 파일이 업데이트됐어. 다음 실행부터 새 버전이 적용돼.',3500)});
 }
-function buzz(ms) { if (navigator.vibrate) { try { navigator.vibrate(ms); } catch {} } }
-
-/* ───────── 입력 상태 ───────── */
-const S = {
-  type: '지출',
-  digits: '',
-  cat: '식비',
-  sub: '',
-  pay: load(K.pay, '체크카드'),
-  date: todayStr(),
-  fixed: false,
-  editId: null
-};
-let curYM = todayStr().slice(0, 7);
-
-function accentOf(type) { return type === '수입' ? 'var(--in)' : type === '이체' ? 'var(--tr)' : 'var(--out)'; }
-function signOf(type)   { return type === '수입' ? '+' : type === '이체' ? '' : '-'; }
-
-/* ───────── 입력 화면 렌더 ───────── */
-function renderSeg() {
-  const i = ['지출','수입','이체'].indexOf(S.type);
-  $$('.seg-b').forEach(b => b.classList.toggle('is-on', b.dataset.type === S.type));
-  $('#segInd').style.transform = `translateX(${i * 100}%)`;
-  document.documentElement.style.setProperty('--accent', accentOf(S.type));
-  $('#amSign').textContent = signOf(S.type);
-  $('#payRow').classList.toggle('off', S.type === '이체');
-  $('#fixedWrap').classList.toggle('off', S.type !== '지출');
-}
-
-function renderAmount(pop) {
-  const box = $('#amountBox');
-  $('#amNum').textContent = S.digits ? Number(S.digits).toLocaleString('ko-KR') : '0';
-  box.classList.toggle('zero', !S.digits);
-  $('#saveBtn').classList.toggle('dim', !S.digits);
-  if (pop) { box.classList.remove('pop'); void box.offsetWidth; box.classList.add('pop'); }
-}
-
-function catOrder(type) {
-  const base = Object.keys(CATS[type]);
-  const rank = {}; base.forEach((c, i) => { rank[c] = i; });
-  const freq = {};
-  for (const t of live()) if (t.type === type) freq[t.cat] = (freq[t.cat] || 0) + 1;
-  return base.slice().sort((a, b) => (freq[b] || 0) - (freq[a] || 0) || rank[a] - rank[b]);
-}
-
-function renderCats() {
-  const keys = catOrder(S.type);
-  if (!keys.includes(S.cat)) { S.cat = keys[0]; S.sub = ''; }
-  $('#catGrid').innerHTML = keys
-    .map(c => `<button class="cat${c === S.cat ? ' is-on' : ''}" data-cat="${c}">${c}</button>`).join('');
-  renderSubs();
-}
-
-function renderSubs() {
-  const subs = CATS[S.type][S.cat] || [];
-  $('#subRow').innerHTML = subs
-    .map(s => `<button class="sub${s === S.sub ? ' is-on' : ''}" data-sub="${s}">${s}</button>`).join('');
-}
-
-function renderPays() {
-  $('#payRow').innerHTML = PAYS
-    .map(p => `<button class="pay${p === S.pay ? ' is-on' : ''}" data-pay="${p}">${p}</button>`).join('');
-}
-
-function renderPresets() {
-  $('#presetRow').innerHTML = PRE.map((p, i) =>
-    `<button class="preset" data-pre="${i}"><span class="p-c">${p.label || p.sub || p.cat}</span><b>${won(p.amount)}</b></button>`
-  ).join('');
-}
-
-function applyPreset(p) {
-  S.type = p.type; S.cat = p.cat; S.sub = p.sub || ''; S.digits = String(p.amount);
-  if (p.pay) S.pay = p.pay;
-  $('#memo').value = p.memo || '';
-  renderAll(); buzz(8);
-}
-
-function renderAll() {
-  renderSeg(); renderAmount(); renderCats(); renderPays(); renderPresets();
-  $('#datePick').value = S.date;
-  $('#fixedChk').checked = S.fixed;
-  $('#editBar').hidden = !S.editId;
-}
-
-function resetInput(keepType) {
-  S.digits = ''; S.sub = ''; S.date = todayStr(); S.fixed = false; S.editId = null;
-  if (!keepType) S.type = '지출';
-  $('#memo').value = '';
-  renderAll();
-}
-
-/* ───────── 저장 ───────── */
-function commit() {
-  const amt = Number(S.digits);
-  if (!amt) { toast('금액을 입력해줘'); return; }
-  const row = {
-    id: S.editId || uid(),
-    date: S.date,
-    type: S.type,
-    amount: amt,
-    cat: S.cat,
-    sub: S.sub || '',
-    pay: S.type === '이체' ? '' : S.pay,
-    memo: $('#memo').value.trim(),
-    fixed: S.type === '지출' && $('#fixedChk').checked,
-    deleted: false,
-    synced: false,
-    updated: Date.now()
-  };
-  const i = TX.findIndex(t => t.id === row.id);
-  if (i >= 0) TX[i] = row; else TX.unshift(row);
-  if (S.type !== '이체') { S.pay = row.pay; save(K.pay, row.pay); }
-  saveTx();
-  curYM = row.date.slice(0, 7);
-  buzz(14);
-  toast(`${signOf(row.type)}${won(row.amount)}원 ${i >= 0 ? '수정했어' : '기록했어'}`);
-  // 수입·이체를 넣은 뒤에는 지출로 되돌린다 (유형이 남아 잘못 분류되는 걸 막기 위해)
-  resetInput(S.type === '지출');
-  renderTop(); renderList(); renderStat();
-  if (CFG.auto && CFG.url) flush(true);
-}
-
-function removeTx(id) {
-  const t = TX.find(x => x.id === id);
-  if (!t) return;
-  t.deleted = true; t.synced = false; t.updated = Date.now();
-  saveTx(); resetInput(true);
-  renderTop(); renderList(); renderStat();
-  toast('삭제했어');
-  if (CFG.auto && CFG.url) flush(true);
-}
-
-function editTx(id) {
-  const t = TX.find(x => x.id === id);
-  if (!t) return;
-  S.editId = t.id; S.type = t.type; S.digits = String(t.amount);
-  S.cat = t.cat; S.sub = t.sub; S.pay = t.pay || S.pay; S.date = t.date; S.fixed = !!t.fixed;
-  $('#memo').value = t.memo || '';
-  go('add'); renderAll();
-}
-
-/* ───────── 상단 요약 / 월 선택 ───────── */
-function monthsAvailable() {
-  const set = new Set(live().map(ymOf).filter(Boolean));
-  set.add(todayStr().slice(0, 7));
-  return [...set].sort().reverse();
-}
-
-function renderTop() {
-  const rows = live().filter(t => ymOf(t) === curYM);
-  const out = rows.filter(t => t.type === '지출').reduce((a, t) => a + t.amount, 0);
-  const inc = rows.filter(t => t.type === '수입').reduce((a, t) => a + t.amount, 0);
-  $('#sumOut').textContent = won(out);
-  $('#sumIn').textContent  = won(inc);
-  const [y, m] = curYM.split('-');
-  $('#monthLabel').textContent = curYM === todayStr().slice(0, 7) ? '이번 달' : `${y.slice(2)}년 ${Number(m)}월`;
-  const sel = $('#monthSel');
-  if (sel) sel.innerHTML = monthsAvailable()
-    .map(ym => `<option value="${ym}"${ym === curYM ? ' selected' : ''}>${ym.split('-')[0]}년 ${Number(ym.split('-')[1])}월</option>`).join('');
-}
-
-/* ───────── 내역 ───────── */
-function renderList() {
-  const rows = live().filter(t => ymOf(t) === curYM)
-    .sort((a, b) => b.date.localeCompare(a.date) || b.updated - a.updated);
-  if (!rows.length) {
-    $('#listWrap').innerHTML = `<p class="empty">이 달은 아직 비어 있어.<br>입력 탭에서 첫 기록을 남겨봐.</p>`;
-    return;
-  }
-  const byDay = {};
-  for (const t of rows) (byDay[t.date] ||= []).push(t);
-  const cls = t => t.type === '수입' ? 'in' : t.type === '이체' ? 'tr' : 'out';
-  const wk = ['일','월','화','수','목','금','토'];
-  $('#listWrap').innerHTML = Object.keys(byDay).map(d => {
-    const day = byDay[d];
-    const net = day.reduce((a, t) => a + (t.type === '수입' ? t.amount : t.type === '지출' ? -t.amount : 0), 0);
-    const dt = new Date(d + 'T00:00:00');
-    return `<div class="daygroup">
-      <div class="dayhead"><span>${Number(d.slice(5,7))}월 ${Number(d.slice(8,10))}일 ${wk[dt.getDay()]}</span><span>${net >= 0 ? '+' : ''}${won(net)}</span></div>
-      ${day.map(t => `<button class="row" data-id="${t.id}">
-        <span class="r-p${t.synced ? ' hide' : ''}"></span>
-        <span class="r-main">
-          <span class="r-t">${esc(t.memo || t.sub || t.cat)}</span>
-          <span class="r-s">${t.cat}${t.sub ? ' · ' + t.sub : ''}${t.pay ? ' · ' + t.pay : ''}${t.fixed ? ' · 고정비' : ''}</span>
-        </span>
-        <span class="r-a ${cls(t)}">${signOf(t.type)}${won(t.amount)}</span>
-      </button>`).join('')}
-    </div>`;
-  }).join('');
-}
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
-
-/* ───────── 통계 ───────── */
-function renderStat() {
-  const rows = live().filter(t => ymOf(t) === curYM);
-  const out = rows.filter(t => t.type === '지출');
-  const inc = rows.filter(t => t.type === '수입');
-  const sOut = out.reduce((a, t) => a + t.amount, 0);
-  const sInc = inc.reduce((a, t) => a + t.amount, 0);
-  const fixed = out.filter(t => t.fixed).reduce((a, t) => a + t.amount, 0);
-
-  const group = arr => {
-    const g = {};
-    for (const t of arr) g[t.cat] = (g[t.cat] || 0) + t.amount;
-    return Object.entries(g).sort((a, b) => b[1] - a[1]);
-  };
-  const bars = (list, total, color) => list.map(([c, v]) => `
-    <div class="bar">
-      <div class="bar-h"><span>${c}<em>${total ? Math.round(v / total * 100) : 0}%</em></span><span>${won(v)}</span></div>
-      <div class="bar-t"><div class="bar-f" style="width:${total ? v / total * 100 : 0}%;background:${color}"></div></div>
-    </div>`).join('');
-
-  if (!rows.length) { $('#statWrap').innerHTML = `<p class="empty">이 달 기록이 없어.</p>`; return; }
-
-  $('#statWrap').innerHTML = `
-    <div class="bignum">
-      <div class="bn"><span>수입</span><strong style="color:var(--in)">${won(sInc)}</strong></div>
-      <div class="bn"><span>지출</span><strong style="color:var(--out)">${won(sOut)}</strong></div>
-      <div class="bn"><span>남은 돈</span><strong>${won(sInc - sOut)}</strong></div>
-    </div>
-    <div class="statsec">
-      <h2>지출 ${fixed ? `(고정비 ${won(fixed)} / 변동비 ${won(sOut - fixed)})` : ''}</h2>
-      ${bars(group(out), sOut, 'var(--out)') || '<p class="hint">지출 기록 없음</p>'}
-    </div>
-    <div class="statsec">
-      <h2>수입</h2>
-      ${bars(group(inc), sInc, 'var(--in)') || '<p class="hint">수입 기록 없음</p>'}
-    </div>`;
-}
-
-/* ───────── 동기화 (GET 전용, Google Sheets가 원본) ───────── */
-function setDot(state) { $('#syncDot').className = 'dot' + (state ? ' ' + state : ''); }
-function pendingCount() { return TX.filter(t => !t.synced).length; }
-function refreshDot() {
-  if (!CFG.url) { setDot(''); return; }
-  setDot(pendingCount() ? 'pending' : 'ok');
-}
-
-// Apps Script는 GET + query string만 처리한다 (POST는 리다이렉트 중 body가 사라지는 문제가 있었음).
-async function callGas(action, payload) {
-  const params = new URLSearchParams();
-  params.set('action', action);
-  params.set('token', CFG.token || '');
-  if (payload !== undefined) params.set('payload', JSON.stringify(payload));
-  const res = await fetch(CFG.url + '?' + params.toString());
-  const txt = await res.text();
-  let data;
-  try { data = JSON.parse(txt); } catch { throw new Error('시트가 이상한 응답을 보냈어. 배포 설정을 확인해줘.'); }
-  if (!data.ok) throw new Error(data.error || '알 수 없는 오류');
-  return data;
-}
-
-function rowForServer(t) {
-  return {
-    id: t.id, date: t.date, type: t.type, amount: t.amount,
-    cat: t.cat, sub: t.sub, pay: t.pay, memo: t.memo,
-    fixed: !!t.fixed, deleted: !!t.deleted, updated: t.updated
-  };
-}
-
-// 서버(getAll) 데이터를 local TX와 병합한다. 같은 id는 updated가 더 큰(최신) 쪽이 승자.
-// 서버에 없던 로컬 전용 항목(아직 한 번도 업로드 못한 데이터)은 그대로 보존한다 -
-// "서버가 비어있다고 로컬을 지우면 안 된다"는 원칙.
-function mergeServerData(rows) {
-  const byId = {};
-  TX.forEach(t => { byId[t.id] = t; });
-  (rows || []).forEach(r => {
-    if (!r || !r.id) return;
-    const server = {
-      id: r.id, date: r.date, type: r.type, amount: Number(r.amount) || 0,
-      cat: r.cat || '', sub: r.sub || '', pay: r.pay || '', memo: r.memo || '',
-      fixed: !!r.fixed, deleted: !!r.deleted, updated: Number(r.updated) || 0,
-      synced: true
-    };
-    const local = byId[r.id];
-    if (!local || server.updated >= (local.updated || 0)) {
-      byId[r.id] = server;
-    }
-  });
-  // 삭제(tombstone) 확정된 항목은 local에서도 제거 (화면/저장 공간에는 유지할 필요 없음)
-  TX = Object.values(byId).filter(t => !t.deleted);
-  saveTx();
-}
-
-// 서버에서 최신 데이터를 가져와 병합하고 화면을 갱신한다.
-async function pullFromServer(quiet) {
-  if (!CFG.url) { setDot(''); return false; }
-  try {
-    const data = await callGas('getAll');
-    mergeServerData(data.rows || []);
-    refreshDot();
-    renderTop(); renderList(); renderStat();
-    return true;
-  } catch (e) {
-    setDot(pendingCount() ? 'pending' : 'err');
-    if (!quiet) toast(e.message);
-    return false;
-  }
-}
-
-let flushing = false;
-// 아직 서버에 못 올린 거래를 업로드하고, 성공하면(혹은 올릴 게 없으면) 서버 최신 상태를 다시 받아온다.
-async function flush(quiet) {
-  if (flushing) return;
-  if (!CFG.url) { if (!quiet) toast('설정에서 웹앱 주소를 넣어줘'); return; }
-
-  const queue = TX.filter(t => !t.synced);
-  if (!queue.length) {
-    if (!quiet) toast('올릴 게 없어');
-    await pullFromServer(true);
-    return;
-  }
-
-  flushing = true; setDot('pending');
-  try {
-    for (let i = 0; i < queue.length; i += GAS_CHUNK_SIZE) {
-      const chunk = queue.slice(i, i + GAS_CHUNK_SIZE);
-      await callGas('upsert', { rows: chunk.map(rowForServer) });
-      chunk.forEach(t => { t.synced = true; });
-      saveTx();
-    }
-  } catch (e) {
-    flushing = false;
-    setDot('err');
-    if (!quiet) toast(e.message);
-    else toast('시트 전송 실패. 휴대폰에는 저장됐어.');
-    return;
-  }
-  flushing = false;
-  renderList();
-  if (!quiet) toast(`${queue.length}건 올렸어`);
-  await pullFromServer(true);
-}
-
-/* ───────── 내보내기 ───────── */
-function download(name, text, mime) {
-  const url = URL.createObjectURL(new Blob(['\ufeff' + text], { type: mime }));
-  const a = document.createElement('a');
-  a.href = url; a.download = name; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
-}
-function toCsv() {
-  const head = ['id','날짜','유형','금액','대분류','소분류','결제수단','메모','고정비'];
-  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const body = live().sort((a, b) => a.date.localeCompare(b.date))
-    .map(t => [t.id, t.date, t.type, t.amount, t.cat, t.sub, t.pay, t.memo, t.fixed ? 'Y' : ''].map(q).join(','));
-  return [head.map(q).join(','), ...body].join('\r\n');
-}
-
-/* ───────── 화면 전환 ───────── */
-function go(view) {
-  $$('.view').forEach(v => { v.hidden = v.dataset.view !== view; });
-  $$('.tab').forEach(b => b.classList.toggle('is-on', b.dataset.go === view));
-  if (view === 'list') renderList();
-  if (view === 'stat') renderStat();
-  if (view === 'set')  renderSettings();
-}
-
-/* ───────── 설정 화면 ───────── */
-function renderSettings() {
-  $('#cfgUrl').value = CFG.url;
-  $('#cfgToken').value = CFG.token;
-  $('#cfgAuto').checked = !!CFG.auto;
-  $('#presetEdit').innerHTML = PRE.map((p, i) =>
-    `<div class="pe"><span>${esc(p.label || p.sub || p.cat)} · ${won(p.amount)}원 · ${esc(p.cat)}${p.sub ? '/' + esc(p.sub) : ''}</span><button data-del="${i}" aria-label="삭제">×</button></div>`
-  ).join('') || '<p class="hint">등록된 항목 없음</p>';
-  $('#syncMsg').textContent = CFG.url ? `대기 중 ${pendingCount()}건` : '연동 안 함';
-  $('#dataMsg').textContent = `총 ${live().length}건`;
-}
-
-/* ───────── 이벤트 ───────── */
-$('#keypad').addEventListener('click', e => {
-  const b = e.target.closest('.k'); if (!b) return;
-  if (b.id === 'saveBtn') return commit();
-  const k = b.dataset.k;
-  if (k === 'del') {
-    S.digits = S.digits.slice(0, -1);
-  } else if (S.digits !== '' || !/^0+$/.test(k)) {
-    if (S.digits.length + k.length <= 10) S.digits += k;
-  }
-  S.digits = S.digits.replace(/^0+/, '');
-  renderAmount(true); buzz(6);
-});
-$('#keypad').addEventListener('contextmenu', e => {
-  const b = e.target.closest('[data-k="del"]');
-  if (b) { e.preventDefault(); S.digits = ''; renderAmount(true); buzz(12); }
-});
-
-$('.seg').addEventListener('click', e => {
-  const b = e.target.closest('.seg-b'); if (!b) return;
-  S.type = b.dataset.type; S.sub = '';
-  renderSeg(); renderAmount(); renderCats();
-});
-$('#catGrid').addEventListener('click', e => {
-  const b = e.target.closest('.cat'); if (!b) return;
-  S.cat = b.dataset.cat; S.sub = '';
-  renderCats(); buzz(6);
-});
-$('#subRow').addEventListener('click', e => {
-  const b = e.target.closest('.sub'); if (!b) return;
-  S.sub = (S.sub === b.dataset.sub) ? '' : b.dataset.sub;
-  renderSubs(); buzz(6);
-});
-$('#payRow').addEventListener('click', e => {
-  const b = e.target.closest('.pay'); if (!b) return;
-  S.pay = b.dataset.pay; renderPays(); buzz(6);
-});
-$('#presetRow').addEventListener('click', e => {
-  const b = e.target.closest('.preset'); if (!b) return;
-  applyPreset(PRE[Number(b.dataset.pre)]);
-});
-$('#datePick').addEventListener('change', e => { S.date = e.target.value || todayStr(); });
-$('#memo').addEventListener('keydown', e => { if (e.key === 'Enter') { e.target.blur(); commit(); } });
-$('#editDel').addEventListener('click', () => { if (S.editId) removeTx(S.editId); });
-$('#editCancel').addEventListener('click', () => resetInput(true));
-
-$('#listWrap').addEventListener('click', e => {
-  const r = e.target.closest('.row'); if (r) editTx(r.dataset.id);
-});
-
-$$('.tab').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
-$('#syncBtn').addEventListener('click', () => flush(false));
-
-// 월 선택
-(function () {
-  const sel = document.createElement('select');
-  sel.id = 'monthSel';
-  $('#monthPick').appendChild(sel);
-  sel.addEventListener('change', () => {
-    curYM = sel.value; renderTop(); renderList(); renderStat();
-  });
-})();
-
-// 설정
-$('#cfgUrl').addEventListener('change', e => { CFG.url = e.target.value.trim(); saveCfg(); refreshDot(); });
-$('#cfgToken').addEventListener('change', e => { CFG.token = e.target.value.trim(); saveCfg(); });
-$('#cfgAuto').addEventListener('change', e => { CFG.auto = e.target.checked; saveCfg(); });
-$('#syncNow').addEventListener('click', async () => { await flush(false); renderSettings(); });
-$('#testConn').addEventListener('click', async () => {
-  if (!CFG.url) return toast('주소를 먼저 넣어줘');
-  const ok = await pullFromServer(false);
-  if (ok) { toast('연결 됐어'); renderSettings(); }
-});
-$('#presetAdd').addEventListener('click', () => {
-  if (!S.digits) return toast('입력 탭에서 금액과 분류를 먼저 정해줘');
-  PRE.push({ type: S.type, amount: Number(S.digits), cat: S.cat, sub: S.sub, pay: S.pay, memo: $('#memo').value.trim(), label: S.sub || S.cat });
-  savePre(); renderPresets(); renderSettings(); toast('추가했어');
-});
-$('#presetEdit').addEventListener('click', e => {
-  const b = e.target.closest('[data-del]'); if (!b) return;
-  PRE.splice(Number(b.dataset.del), 1); savePre(); renderPresets(); renderSettings();
-});
-$('#expCsv').addEventListener('click', () => download(`가계부_${todayStr()}.csv`, toCsv(), 'text/csv;charset=utf-8'));
-$('#expJson').addEventListener('click', () => download(`가계부_백업_${todayStr()}.json`, JSON.stringify({ tx: TX, presets: PRE }), 'application/json'));
-$('#impJson').addEventListener('click', () => $('#impFile').click());
-$('#impFile').addEventListener('change', async e => {
-  const f = e.target.files[0]; if (!f) return;
-  try {
-    const d = JSON.parse(await f.text());
-    const ids = new Set(TX.map(t => t.id));
-    let n = 0;
-    for (const t of (d.tx || [])) {
-      if (!ids.has(t.id)) {
-        // 백업 파일의 synced 값은 신뢰하지 않는다 - 서버 확인 전까지는 미동기화로 취급하고
-        // 다음 flush에서 서버와 다시 맞춘다 (서버에 이미 있으면 updated 비교로 자연스럽게 정리됨).
-        TX.push(Object.assign({}, t, { synced: false }));
-        n++;
-      }
-    }
-    if (d.presets) { PRE = d.presets; savePre(); }
-    saveTx(); renderAll(); renderTop(); renderList(); renderStat(); renderSettings();
-    toast(`${n}건 불러왔어. 서버와 확인 중...`);
-    if (CFG.url) flush(true);
-  } catch { toast('파일을 읽지 못했어'); }
-  e.target.value = '';
-});
-$('#wipe').addEventListener('click', () => {
-  if (!confirm('이 기기의 모든 기록을 지울까? 되돌릴 수 없어. (구글 시트의 데이터는 지워지지 않음)')) return;
-  TX = []; saveTx(); renderAll(); renderTop(); renderList(); renderStat(); renderSettings();
-  toast('이 기기에서만 지웠어');
-});
-
-window.addEventListener('online', () => { if (CFG.url) flush(true); });
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    if (S.date !== todayStr() && !S.editId) { S.date = todayStr(); $('#datePick').value = S.date; }
-    if (CFG.url) flush(true);
-  }
-});
-
-/* ───────── 시작 ───────── */
-renderAll(); renderTop(); refreshDot();
-if (CFG.url) flush(true);
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+function init(){restoreDraft();bind();const q=new URLSearchParams(location.search).get('view');history.replaceState({view:q&&['add','list','stat','set'].includes(q)?q:'add'},'');renderAll();renderTop();go(history.state.view,false);refreshSyncUI();requestPersistentStorage();if(startupWarnings.length)showToast(startupWarnings[0],4000);if(CFG.url)syncNow(true);if('BroadcastChannel'in window){bc=new BroadcastChannel('ledger-sync');bc.onmessage=e=>{if(e.data?.from!==TAB_ID)reloadShared()}}if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{})}
+document.addEventListener('DOMContentLoaded',init);
