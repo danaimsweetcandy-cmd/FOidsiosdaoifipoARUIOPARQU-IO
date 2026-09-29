@@ -14,11 +14,19 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="month-pick" id="monthPick">
-    <span id="monthLabel">이번 달</span>
-    <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+  <div class="month-nav" aria-label="월 이동">
+    <button class="month-step" id="prevMonthBtn" type="button" aria-label="이전 달">‹</button>
+    <div class="month-pick" id="monthPick">
+      <span id="monthLabel">이번 달</span>
+      <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </div>
+    <button class="month-step" id="nextMonthBtn" type="button" aria-label="다음 달">›</button>
+    <button class="thismonth hide" id="thisMonthBtn" type="button">이번 달</button>
   </div>
-  <div class="topsum" aria-label="이번 달 지출과 수입"><span class="ts-out" id="sumOut">0</span><span class="ts-div">/</span><span class="ts-in" id="sumIn">0</span></div>
+  <div class="topsum" aria-label="선택한 달의 지출과 수입">
+    <span class="sumitem ts-out"><small>지출</small><b id="sumOut">0</b></span>
+    <span class="sumitem ts-in"><small>수입</small><b id="sumIn">0</b></span>
+  </div>
   <button class="syncdot" id="syncBtn" type="button" aria-label="동기화 상태: 연동 안 함" title="동기화 상태"><span class="dot" id="syncDot" aria-hidden="true"></span></button>
 </header>
 <main>
@@ -62,20 +70,22 @@
     <div class="btnrow"><button class="btn primary" id="testConn" type="button">연결 확인</button><button class="btn" id="syncNow" type="button">지금 동기화</button><button class="btn" id="fullSync" type="button">전체 다시 맞추기</button></div>
     <p class="hint statusline" id="syncMsg" role="status" aria-live="polite"></p>
     <h2>자주 쓰는 항목</h2>
-    <p class="hint">입력 화면의 원탭 버튼. 금액과 분류를 한 번에 채워.</p>
+    <p class="hint">입력 화면의 원탭 버튼. 금액을 입력한 채 추가하면 금액+분류, 금액이 비어 있으면 분류만 채워.</p>
     <div class="presetedit" id="presetEdit"></div><button class="btn" id="presetAdd" type="button">지금 입력값을 추가</button>
     <h2>데이터 · 백업</h2>
     <div class="btnrow"><button class="btn" id="expCsv" type="button">CSV 내보내기</button><button class="btn" id="expJson" type="button">JSON 백업</button><button class="btn" id="impJson" type="button">백업 불러오기</button></div>
     <p class="hint" id="dataMsg"></p>
-    <div class="dangerzone"><h2>복구 · 초기화</h2><p class="hint">로컬 캐시를 비워도 시트 데이터는 다음 동기화 때 다시 내려와.</p><button class="btn btn-danger" id="wipe" type="button">로컬 캐시 초기화</button></div>
+    <button class="btn" id="recoveryToggle" type="button" aria-expanded="false">복구본 보기</button>
+    <div class="recovery-list" id="recoveryList" hidden></div>
+    <div class="dangerzone"><h2>복구 · 초기화</h2><p class="hint">전송 대기 기록이 있으면 초기화를 막아. 시트 미연결 상태에서는 먼저 JSON 백업을 권장해.</p><button class="btn btn-danger" id="wipe" type="button">로컬 캐시 초기화</button></div>
     <h2>앱 정보</h2>
-    <p class="hint" id="appInfo">가계부 v3.0.0 · 데이터 schema 3</p><p class="hint" id="storageMsg"></p>
+    <p class="hint" id="appInfo">가계부 v3.1.0 · 데이터 schema 3</p><p class="hint" id="storageMsg"></p>
     <input type="file" id="impFile" accept="application/json,.json" hidden>
   </div>
 </section>
 </main>
 <nav class="tabbar" aria-label="주요 메뉴">
-  <button class="tab is-on" data-go="add" type="button" aria-current="page">입력</button><button class="tab" data-go="list" type="button">내역</button><button class="tab" data-go="stat" type="button">통계</button><button class="tab" data-go="set" type="button">설정</button>
+  <button class="tab is-on" data-go="add" type="button" aria-current="page">입력</button><button class="tab" data-go="list" type="button">내역</button><button class="tab" data-go="stat" type="button">월요약</button><button class="tab" data-go="set" type="button">설정</button>
 </nav>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <div class="undo" id="undoBar" role="status" aria-live="assertive" hidden><span id="undoText">삭제했어</span><button id="undoBtn" type="button">실행 취소</button></div>

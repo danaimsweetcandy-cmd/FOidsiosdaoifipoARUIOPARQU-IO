@@ -1,33 +1,59 @@
-# 가계부 PWA v3
+# 가계부 PWA v3.1.0
 
-Google Sheets를 원본으로 두고, 기기에 즉시 저장한 뒤 온라인일 때 안전하게 동기화하는 개인 가계부.
+돈 관리가 어렵더라도 `바로 기록`하고, 나중에 `월별 수입·지출과 카테고리`를 쉽게 확인하는 개인용 가계부.
 
 ## 배포 순서
 
-1. 기존 저장소의 `icon-192.png`, `icon-512.png`, `icon-maskable.png`는 그대로 유지한다.
-2. 이 폴더의 `index.html`, `style.css`, `app.js`, `manifest.json`, `sw.js`, `screenshots/`를 GitHub Pages 저장소 루트에 덮어쓴다.
-3. Google Sheets의 Apps Script에서 기존 코드를 `Code.gs` 전체 내용으로 교체한다.
-4. `Code.gs` 맨 위 `TOKEN`을 기존에 쓰던 값으로 맞춘다.
-5. Apps Script에서 `setup()`을 한 번 실행한다. 기존 거래 데이터는 보존되고 새 동기화 메타 컬럼만 추가된다.
-6. 배포 관리에서 웹 앱을 **새 버전**으로 배포한다. 실행 계정은 나, 액세스 권한은 반드시 **모든 사용자**.
-7. 앱 설정에서 `연결 확인` 후 `전체 다시 맞추기`를 한 번 실행한다.
+1. GitHub Pages 저장소 루트의 파일을 이 패키지 파일로 교체한다.
+2. Google Sheets의 `확장 프로그램 → Apps Script`에서 기존 코드를 `Code.gs` 전체 내용으로 교체한다.
+3. `Code.gs` 맨 위 `TOKEN`을 기존에 사용하던 값과 동일하게 맞춘다.
+4. Apps Script에서 `setup()`을 한 번 실행한다. 기존 거래 데이터는 보존된다.
+5. `배포 → 배포 관리 → 편집 → 버전: 새 버전 → 배포`를 실행한다.
+6. 실행 계정은 `나`, 웹 앱 접근 권한은 반드시 `모든 사용자`로 유지한다.
+7. 설치된 가계부를 다시 열고 설정에서 `연결 확인 → 전체 다시 맞추기`를 한 번 실행한다.
 
-## 중요
+## 이번 v3.1 핵심 수정
 
-- 데이터 쓰기는 계속 **GET + query string**만 사용한다. POST로 바꾸지 않는다.
-- 서비스워커 캐시는 `ledger-v3`이다.
-- 기존 로컬 데이터 키(`lg.tx`, `lg.cfg`, `lg.presets`, `lg.lastpay`)는 그대로 읽고 v3 형식으로 마이그레이션한다.
-- 삭제는 tombstone으로 동기화되고 서버 확인 전에는 로컬에서 버리지 않는다.
-- JSON 백업은 BOM 없이 저장하고, 예전 BOM 포함 백업도 읽는다.
-- `로컬 캐시 초기화`는 Google Sheets를 지우지 않는다.
+- 업로드 응답으로 pull cursor를 먼저 올리지 않도록 수정해 다른 기기의 revision 누락 방지
+- 서버 pull 실패를 동기화 성공으로 표시하지 않도록 수정
+- `getAll` 읽기에도 `LockService`를 적용해 rows와 cursor를 동일 snapshot으로 반환
+- 서버가 거부한 충돌 업로드를 즉시 synced 처리하지 않고 복구본 보존 후 서버 최신본 적용
+- 전송 대기 데이터가 있으면 `로컬 캐시 초기화` 차단
+- 시트 미연결 상태에서 로컬 기록 초기화 시 2단 확인
+- 상단 월 합계를 `지출 / 수입` 라벨로 명확하게 표시
+- `통계` 탭을 `월요약`으로 변경
+- `남은 돈`을 실제 의미인 `수입-지출`로 변경
+- 월요약에 `고정비 / 변동비`를 분리 표시
+- 대분류 순서를 사용 빈도와 무관하게 고정해 위치 기억 유지
+- 금액 없는 자주 쓰는 항목 지원. 카테고리만 원탭으로 채울 수 있음
+- 내역 수정/삭제/취소 후 원래 내역 위치로 복귀
+- 실제 스크롤 컨테이너 기준 위치 복원
+- draft 날짜를 사용자가 직접 바꾼 경우에만 과거 날짜 유지
+- 연결 전/동기화 중/오프라인 대기/완료/오류 상태를 명확히 구분
+- 충돌 복구본 보기/개별 복원 UI 추가
+- 이전 달/다음 달/이번 달 빠른 이동 추가
+- PC 숫자키, Backspace, Enter 금액 입력 지원
+- 새 설치용 아이콘 3종을 패키지에 포함
 
-## v3 핵심 변경
+## 데이터 및 동기화 원칙
 
-- 전송 중 재수정 경쟁 조건 제거, 스냅샷 ACK 방식
-- `updated + deviceId` 충돌 판정과 서버 revision/cursor 증분 동기화
-- 서버 LockService, strict validation, idempotent upsert
-- timeout, retry/backoff, wrong-app/wrong-sheet 연결 차단
-- 삭제 Undo, 작성 중 draft 복구, 중복 저장 및 한글 IME 오입력 방지
-- 백업 검증/미리보기/최신 버전 병합
-- 접근성, 터치 영역, 확대 허용, safe-area, landscape/multi-window 대응
-- PWA shortcuts, screenshots, 동기화 진단/앱 버전 표시
+- Google Sheets가 원본(canonical)이며 localStorage는 즉시 저장소 + 오프라인 버퍼다.
+- 모든 데이터 쓰기는 **GET + query string**만 사용한다. POST로 바꾸지 않는다.
+- 같은 거래의 충돌은 `updated + deviceId`로 비교한다.
+- 삭제는 행을 물리 삭제하지 않고 tombstone으로 동기화한다.
+- 서버가 비어 있다는 이유만으로 로컬 전용 데이터를 지우지 않는다.
+- pull cursor는 **성공한 getAll 응답에서만** 전진한다.
+- JSON 백업에는 Apps Script URL과 토큰이 포함되지 않는다.
+
+## 서비스 워커
+
+이번 버전 캐시는 `ledger-v3-1`이다. GitHub Pages 파일을 바꿀 때 `sw.js`도 반드시 같이 올린다.
+
+## 실제 기기 최종 확인 권장
+
+- Galaxy에서 홈 화면 설치/업데이트
+- Android 시스템 뒤로가기
+- 소프트 키보드와 200% 글자 크기
+- 화면 회전/멀티윈도우
+- 실제 Apps Script URL과 Google Sheet 동기화
+- 두 기기에서 동시에 수정/삭제 후 충돌 복구 확인

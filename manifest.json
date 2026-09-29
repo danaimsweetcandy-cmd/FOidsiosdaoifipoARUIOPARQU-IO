@@ -2,7 +2,7 @@
   "id": "./?app=ledger",
   "name": "가계부",
   "short_name": "가계부",
-  "description": "쓰는 즉시 남기는 오프라인 우선 개인 가계부",
+  "description": "바로 기록하고 월별 수입·지출과 카테고리를 확인하는 개인 가계부",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

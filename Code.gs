@@ -129,11 +129,23 @@ function upsertRows_(rows) {
 }
 
 function getAllResponse_(sinceRevParam) {
-  var sinceRev = Number(sinceRevParam);
-  var incremental = isFinite(sinceRev) && sinceRev > 0;
-  var rows = getAllRows_(incremental ? sinceRev : 0);
-  var m = meta_();
-  return {ok:true, appId:APP_ID, schemaVersion:SCHEMA_VERSION, storeId:m.storeId, serverTime:m.serverTime, cursor:m.cursor, incremental:incremental, rows:rows};
+  // rows와 cursor를 반드시 같은 서버 snapshot에서 읽는다.
+  // 쓰기 중간에 cursor만 앞서가면 클라이언트가 일부 revision을 영구적으로 건너뛸 수 있다.
+  var lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    var sinceRev = Number(sinceRevParam);
+    var incremental = isFinite(sinceRev) && sinceRev > 0;
+    var rows = getAllRows_(incremental ? sinceRev : 0);
+    var cursor = getRev_();
+    return {
+      ok:true, appId:APP_ID, schemaVersion:SCHEMA_VERSION,
+      storeId:getStoreId_(), serverTime:Date.now(), cursor:cursor,
+      incremental:incremental, rows:rows
+    };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
 }
 function getAllRows_(sinceRev) {
   var sh=sheet_(), last=sh.getLastRow(); if (last<2) return [];
@@ -195,5 +207,5 @@ function setup() {
   c.getRange('A3').setFormula("=IFERROR(QUERY(거래!A2:N, \"select F, G, sum(E) where D='지출' and L<>'Y' and C='\"&$B$1&\"' group by F, G order by sum(E) desc label F '대분류', G '소분류', sum(E) '금액'\",0),\"기록 없음\")");
   c.getRange('F3').setFormula("=IFERROR(QUERY(거래!A2:N, \"select H, sum(E) where D='지출' and L<>'Y' and C='\"&$B$1&\"' group by H order by sum(E) desc label H '결제수단', sum(E) '금액'\",0),\"\")");
   c.getRange('C:C').setNumberFormat('#,##0'); c.getRange('G:G').setNumberFormat('#,##0');
-  SpreadsheetApp.getUi().alert('v3 준비 끝. 배포 관리에서 새 버전으로 다시 배포해줘.');
+  SpreadsheetApp.getUi().alert('v3.1 준비 끝. 배포 관리에서 새 버전으로 다시 배포해줘.');
 }

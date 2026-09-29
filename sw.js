@@ -1,4 +1,4 @@
-const CACHE='ledger-v3';
+const CACHE='ledger-v3-1';
 const CORE=['./','./index.html','./style.css','./app.js','./manifest.json'];
 const OPTIONAL=['./icon-192.png','./icon-512.png','./icon-maskable.png','./screenshots/ledger-mobile.png'];
 self.addEventListener('install',e=>{e.waitUntil((async()=>{const c=await caches.open(CACHE);await c.addAll(CORE);await Promise.allSettled(OPTIONAL.map(x=>c.add(x)));await self.skipWaiting()})())});
